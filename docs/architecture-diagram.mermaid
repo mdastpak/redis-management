@@ -1,0 +1,37 @@
+graph TB
+    subgraph Client Application
+        A[Client Code] --> |Uses| B[Redis Management Package]
+    end
+
+    subgraph Redis Management Package
+        B --> C[Config Manager]
+        B --> D[Redis Service]
+        B --> E[Key Manager]
+        
+        subgraph Core Components
+            D --> F[Connection Pool]
+            D --> G[Bulk Processor]
+            D --> H[Basic Operations]
+            D --> I[Error Handler]
+        end
+
+        C --> |Configures| D
+        E --> |Manages| H
+        F --> |Provides| H
+        G --> |Batches| H
+    end
+
+    subgraph Redis Infrastructure
+        H --> |Interacts| J[Redis Server]
+        F --> |Connects| J
+    end
+
+    subgraph Utilities
+        K[Health Check]
+        L[Retry Mechanism]
+        M[Logging]
+    end
+
+    D --> K
+    D --> L
+    D --> M
