@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"redis-management/config"
+	"github.com/mdastpak/redis-management/config"
 
 	"github.com/stretchr/testify/assert"
 )
