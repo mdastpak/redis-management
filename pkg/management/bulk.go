@@ -3,7 +3,6 @@ package management
 
 import (
 	"context"
-	"sync"
 	"time"
 )
 
@@ -24,7 +23,7 @@ type BulkProcessor struct {
 	interval   time.Duration
 	maxRetries int
 	concurrent bool
-	mu         sync.RWMutex
+	// mu         sync.RWMutex
 }
 
 // NewBulkProcessor creates a new bulk processor
@@ -55,7 +54,7 @@ func (bp *BulkProcessor) processQueue(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			if len(batch) > 0 {
-				bp.flush(batch)
+				bp.processBatch(batch)
 			}
 			return
 
@@ -63,9 +62,11 @@ func (bp *BulkProcessor) processQueue(ctx context.Context) {
 			batch = append(batch, op)
 			if len(batch) >= bp.batchSize {
 				if bp.concurrent {
-					go bp.flush(batch)
+					batchCopy := make([]BulkOperation, len(batch))
+					copy(batchCopy, batch)
+					go bp.processBatch(batchCopy)
 				} else {
-					bp.flush(batch)
+					bp.processBatch(batch)
 				}
 				batch = make([]BulkOperation, 0, bp.batchSize)
 			}
@@ -73,9 +74,11 @@ func (bp *BulkProcessor) processQueue(ctx context.Context) {
 		case <-ticker.C:
 			if len(batch) > 0 {
 				if bp.concurrent {
-					go bp.flush(batch)
+					batchCopy := make([]BulkOperation, len(batch))
+					copy(batchCopy, batch)
+					go bp.processBatch(batchCopy)
 				} else {
-					bp.flush(batch)
+					bp.processBatch(batch)
 				}
 				batch = make([]BulkOperation, 0, bp.batchSize)
 			}
@@ -83,14 +86,15 @@ func (bp *BulkProcessor) processQueue(ctx context.Context) {
 	}
 }
 
-// flush processes a batch of operations
-func (bp *BulkProcessor) flush(batch []BulkOperation) {
-	bp.mu.Lock()
-	defer bp.mu.Unlock()
+func (bp *BulkProcessor) processBatch(batch []BulkOperation) {
+	if len(batch) == 0 {
+		return
+	}
 
 	pipe := bp.service.client.Pipeline()
+	defer pipe.Close()
 
-	// Group operations by database
+	// Group by database for efficiency
 	opsByDB := make(map[int][]BulkOperation)
 	for _, op := range batch {
 		db, err := bp.service.keyMgr.GetShardIndex(op.Key)
@@ -101,29 +105,24 @@ func (bp *BulkProcessor) flush(batch []BulkOperation) {
 		opsByDB[db] = append(opsByDB[db], op)
 	}
 
-	// Process operations for each database
+	// Process each database group
 	for db, ops := range opsByDB {
-		// Select database
+		// Select database once for group
 		pipe.Do(context.Background(), "SELECT", db)
 
-		// Add operations to pipeline
+		// Add all operations to pipeline
 		for _, op := range ops {
-			key := bp.service.keyMgr.GetKey(op.Key)
-			switch op.Command {
-			case "SET":
-				pipe.Set(context.Background(), key, op.Value, op.ExpiresAt)
-			case "DEL":
-				pipe.Del(context.Background(), key)
-				// Add other commands as needed
-			}
+			finalKey := bp.service.keyMgr.GetKey(op.Key)
+			pipe.Set(context.Background(), finalKey, op.Value, op.ExpiresAt)
+		}
+
+		// Execute all operations in one go
+		_, err := pipe.Exec(context.Background())
+
+		// Handle results
+		for _, op := range ops {
+			op.Result <- err
 		}
 	}
 
-	// Execute pipeline
-	_, err := pipe.Exec(context.Background())
-
-	// Handle results
-	for _, op := range batch {
-		op.Result <- err
-	}
 }
