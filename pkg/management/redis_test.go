@@ -26,7 +26,7 @@ func setupTestRedis(t *testing.T) (*miniredis.Miniredis, *config.Config) {
 			KeyPrefix:           "test:",
 			Timeout:             5,
 			HashKeys:            false,
-			HealthCheckInterval: 0, // غیرفعال کردن health check برای تست
+			HealthCheckInterval: 0, // Disable health checks for testing
 			RetryAttempts:       2,
 			RetryDelay:          100 * time.Millisecond,
 			MaxRetryBackoff:     1000 * time.Millisecond,

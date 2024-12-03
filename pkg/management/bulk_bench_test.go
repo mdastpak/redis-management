@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkBulkOperations(b *testing.B) {
@@ -16,10 +18,9 @@ func BenchmarkBulkOperations(b *testing.B) {
 			defer mr.Close()
 
 			cfg.Bulk.BatchSize = 10 * scale
+
 			service, err := NewRedisService(cfg)
-			if err != nil {
-				b.Fatalf("Failed to create service: %v", err)
-			}
+			require.NoError(b, err)
 			defer service.Close()
 
 			ctx := context.Background()

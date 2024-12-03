@@ -9,15 +9,18 @@ import (
 	"time"
 
 	"github.com/mdastpak/redis-management/config"
+	"github.com/stretchr/testify/require"
 
 	"github.com/alicebob/miniredis/v2"
 )
 
+// setupBenchmarkRedis creates a new miniredis instance and configures a new Redis service for benchmarking
+// this fuction equlas to the setupTestRedis function in pkg/management/redis_test.go
+// but it is modified to be used for benchmarking purposes
 func setupBenchmarkRedis(b *testing.B) (*miniredis.Miniredis, *config.Config) {
+
 	mr, err := miniredis.Run()
-	if err != nil {
-		b.Fatalf("Failed to start miniredis: %v", err)
-	}
+	require.NoError(b, err)
 
 	cfg := &config.Config{
 		Redis: config.RedisConfig{
@@ -48,6 +51,7 @@ func setupBenchmarkRedis(b *testing.B) (*miniredis.Miniredis, *config.Config) {
 			ConcurrentFlush: true,
 		},
 	}
+
 	return mr, cfg
 }
 
@@ -189,4 +193,59 @@ func BenchmarkRedisService_MemoryUsage(b *testing.B) {
 			b.Fatalf("Failed to set large value: %v", err)
 		}
 	}
+}
+
+func BenchmarkRedisService_ParallelPoolPerformance(b *testing.B) {
+	mr, service := setupBenchmarkService(b)
+	defer mr.Close()
+	defer service.Close()
+
+	ctx := context.Background()
+
+	b.Run("Sequential Operations", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			key := fmt.Sprintf("bench:seq:%d", i)
+			err := service.Set(ctx, key, "value", time.Hour)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("Parallel Operations", func(b *testing.B) {
+		b.RunParallel(func(pb *testing.PB) {
+			i := 0
+			for pb.Next() {
+				key := fmt.Sprintf("bench:par:%d", i)
+				err := service.Set(ctx, key, "value", time.Hour)
+				if err != nil {
+					b.Fatal(err)
+				}
+				i++
+			}
+		})
+	})
+
+	b.Run("Mixed Operations", func(b *testing.B) {
+		b.RunParallel(func(pb *testing.PB) {
+			i := 0
+			for pb.Next() {
+				key := fmt.Sprintf("bench:mixed:%d", i)
+
+				// Set operation
+				err := service.Set(ctx, key, "value", time.Hour)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				// Get operation
+				_, err = service.Get(ctx, key)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				i++
+			}
+		})
+	})
 }
