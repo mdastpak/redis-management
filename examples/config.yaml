@@ -1,0 +1,40 @@
+# config.yaml
+redis:
+  host: "localhost"
+  port: "6379"
+  password: ""
+  db: "0-5"  # Can be single number or range (e.g., "0" or "0-5")
+  key_prefix: ""  # Optional prefix for all keys
+  timeout: 5  # Connection timeout in seconds
+  hash_keys: true  # Whether to hash keys using SHA-256
+  health_check_interval: 30  # Health check interval in seconds
+  retry_attempts: 3  # Number of retry attempts for failed operations
+  retry_delay: 1000  # Delay between retries in milliseconds
+  max_retry_backoff: 5000  # Maximum backoff time in milliseconds
+
+pool:
+  status: true  # Enable/disable connection pooling
+  size: 50  # Maximum number of connections in the pool
+  min_idle: 10  # Minimum number of idle connections
+  max_idle_time: 300  # Maximum idle time for connections in seconds
+  wait_timeout: 30  # Maximum wait time for connection from pool
+
+bulk:
+  status: true  # Enable/disable bulk operations
+  batch_size: 1000  # Maximum number of operations in a batch
+  flush_interval: 5  # Interval to flush batch in seconds
+  max_retries: 3  # Maximum retry attempts for failed bulk operations
+  concurrent_flush: true  # Enable concurrent flushing of batches
+
+logging:
+  level: "info"  # Logging level (debug, info, warn, error)
+  format: "json"  # Log format (json or text)
+  output: "stdout"  # Output destination (stdout, file)
+  file_path: ""  # Log file path if output is file
+
+circuit:
+  status: true # Enable/disable circuit breaker
+  threshold: 5 # Number of failed operations to trip the circuit
+  reset_timeout: 10  # Time to wait before resetting the circuit in seconds
+  max_half_open: 2 # Maximum number of half-open attempts before resetting the circuit
+

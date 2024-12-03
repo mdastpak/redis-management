@@ -34,18 +34,16 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 		bulkQueue: make(chan BulkOperation, cfg.Bulk.BatchSize),
 	}
 
+	// Initialize connection
 	if err := service.connect(); err != nil {
 		return nil, err
 	}
 
+	// Initialize pool if enabled
 	if cfg.Pool.Status {
 		if err := service.initPool(); err != nil {
 			return nil, err
 		}
-	}
-
-	if cfg.Bulk.Status {
-		service.startBulkProcessor()
 	}
 
 	// Initialize circuit breaker if enabled
@@ -55,6 +53,11 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 			time.Duration(cfg.Circuit.ResetTimeout)*time.Second,
 			cfg.Circuit.MaxHalfOpen,
 		)
+	}
+
+	// Initialize bulk processor if enabled
+	if cfg.Bulk.Status {
+		service.startBulkProcessor()
 	}
 
 	return service, nil
@@ -117,117 +120,6 @@ func (rs *RedisService) AddBulkOperation(ctx context.Context, command string, ke
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-// Modify Set method to use circuit breaker if enabled
-func (rs *RedisService) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
-	if rs.cb != nil {
-		return rs.cb.Execute(func() error {
-			return rs.set(ctx, key, value, expiration)
-		})
-	}
-	return rs.set(ctx, key, value, expiration)
-}
-
-// Set stores a key-value pair in Redis with an expiration time
-func (rs *RedisService) set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
-	if rs.cfg.Bulk.Status {
-		return rs.AddBulkOperation(ctx, "SET", key, value, expiration)
-	}
-
-	client := rs.getClient()
-	if client == nil {
-		return fmt.Errorf("redis client is not initialized")
-	}
-
-	finalKey := rs.keyMgr.GetKey(key)
-	db, err := rs.keyMgr.GetShardIndex(key)
-	if err != nil {
-		return fmt.Errorf("failed to get shard index: %v", err)
-	}
-
-	// Select appropriate database
-	if err := client.Do(ctx, "SELECT", db).Err(); err != nil {
-		return fmt.Errorf("failed to select database: %v", err)
-	}
-
-	// Perform SET operation with retry logic
-	var setErr error
-	for attempt := 0; attempt <= rs.cfg.Redis.RetryAttempts; attempt++ {
-		err := client.Set(ctx, finalKey, value, expiration).Err()
-		if err == nil {
-			return nil
-		}
-
-		setErr = err
-		if attempt < rs.cfg.Redis.RetryAttempts {
-			// Calculate backoff time
-			backoff := time.Duration(attempt+1) * rs.cfg.Redis.RetryDelay
-			if backoff > rs.cfg.Redis.MaxRetryBackoff {
-				backoff = rs.cfg.Redis.MaxRetryBackoff
-			}
-			time.Sleep(backoff)
-		}
-	}
-
-	return fmt.Errorf("failed to set key after %d attempts: %v", rs.cfg.Redis.RetryAttempts, setErr)
-}
-
-// Modify Get method similarly
-func (rs *RedisService) Get(ctx context.Context, key string) (string, error) {
-	if rs.cb != nil {
-		var result string
-		err := rs.cb.Execute(func() error {
-			var err error
-			result, err = rs.get(ctx, key)
-			return err
-		})
-		return result, err
-	}
-	return rs.get(ctx, key)
-}
-
-// Get retrieves a value from Redis by key
-func (rs *RedisService) get(ctx context.Context, key string) (string, error) {
-	client := rs.getClient()
-	if client == nil {
-		return "", fmt.Errorf("redis client is not initialized")
-	}
-
-	finalKey := rs.keyMgr.GetKey(key)
-	db, err := rs.keyMgr.GetShardIndex(key)
-	if err != nil {
-		return "", fmt.Errorf("failed to get shard index: %v", err)
-	}
-
-	// Select appropriate database
-	if err := client.Do(ctx, "SELECT", db).Err(); err != nil {
-		return "", fmt.Errorf("failed to select database: %v", err)
-	}
-
-	// Perform GET operation with retry logic
-	var getErr error
-	for attempt := 0; attempt <= rs.cfg.Redis.RetryAttempts; attempt++ {
-		value, err := client.Get(ctx, finalKey).Result()
-		if err == nil {
-			return value, nil
-		}
-		if err == redis.Nil {
-			return "", fmt.Errorf("key not found")
-		}
-
-		getErr = err
-		if attempt < rs.cfg.Redis.RetryAttempts {
-			// Calculate backoff time
-			backoff := time.Duration(attempt+1) * rs.cfg.Redis.RetryDelay
-			if backoff > rs.cfg.Redis.MaxRetryBackoff {
-				backoff = rs.cfg.Redis.MaxRetryBackoff
-			}
-			time.Sleep(backoff)
-		}
-	}
-
-	return "", fmt.Errorf("failed to get key after %d attempts: %v", rs.cfg.Redis.RetryAttempts, getErr)
 }
 
 // getClient returns the appropriate Redis client (pool or regular)
