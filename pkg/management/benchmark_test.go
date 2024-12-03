@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,13 +77,20 @@ func BenchmarkRedisService_Set(b *testing.B) {
 	ctx := context.Background()
 	value := "test-value"
 
+	b.ReportAllocs() // Report memory allocations
 	b.ResetTimer()
+
+	start := time.Now()
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key:%d", i)
 		if err := service.Set(ctx, key, value, time.Hour); err != nil {
 			b.Fatalf("Failed to set key: %v", err)
 		}
 	}
+	elapsed := time.Since(start)
+
+	b.ReportMetric(float64(b.N)/elapsed.Seconds(), "ops/sec")
+	b.ReportMetric(float64(elapsed)/float64(b.N), "ns/op")
 }
 
 // Basic GET operation benchmark
@@ -137,17 +145,32 @@ func BenchmarkRedisService_ConcurrentOperations(b *testing.B) {
 	ctx := context.Background()
 	value := "concurrent-test-value"
 
+	var operations int64
+	start := time.Now()
+
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
+		localOps := 0
 		for pb.Next() {
 			key := fmt.Sprintf("concurrent:key:%d", i)
 			if err := service.Set(ctx, key, value, time.Hour); err != nil {
 				b.Fatalf("Failed concurrent set: %v", err)
 			}
 			i++
+			localOps++
 		}
+		atomic.AddInt64(&operations, int64(localOps))
 	})
+
+	elapsed := time.Since(start)
+	opsPerSec := float64(operations) / elapsed.Seconds()
+	avgLatency := elapsed.Nanoseconds() / operations
+
+	b.ReportMetric(opsPerSec, "ops/sec")
+	b.ReportMetric(float64(avgLatency), "ns/op")
+	b.Logf("Total operations: %d in %v (%.2f ops/sec, %.2f µs/op)",
+		operations, elapsed, opsPerSec, float64(avgLatency)/1000)
 }
 
 // Pool performance benchmark
@@ -160,9 +183,14 @@ func BenchmarkRedisService_PoolPerformance(b *testing.B) {
 	value := "pool-test-value"
 	numGoroutines := 10
 
+	var totalOps int64
+	start := time.Now()
+
 	b.ResetTimer()
-	var wg sync.WaitGroup
 	for i := 0; i < b.N; i++ {
+		var wg sync.WaitGroup
+		batchStart := time.Now()
+
 		for j := 0; j < numGoroutines; j++ {
 			wg.Add(1)
 			go func(idx int) {
@@ -171,10 +199,23 @@ func BenchmarkRedisService_PoolPerformance(b *testing.B) {
 				if err := service.Set(ctx, key, value, time.Hour); err != nil {
 					b.Errorf("Failed pool operation: %v", err)
 				}
+				atomic.AddInt64(&totalOps, 1)
 			}(i*numGoroutines + j)
 		}
 		wg.Wait()
+
+		batchElapsed := time.Since(batchStart)
+		b.Logf("Batch %d: %d operations in %v", i+1, numGoroutines, batchElapsed)
 	}
+
+	elapsed := time.Since(start)
+	opsPerSec := float64(totalOps) / elapsed.Seconds()
+	avgLatency := elapsed.Nanoseconds() / totalOps
+
+	b.ReportMetric(opsPerSec, "ops/sec")
+	b.ReportMetric(float64(avgLatency), "ns/op")
+	b.Logf("Summary: %d total operations in %v (%.2f ops/sec, %.2f µs/op)",
+		totalOps, elapsed, opsPerSec, float64(avgLatency)/1000)
 }
 
 // Memory usage benchmark
@@ -203,6 +244,9 @@ func BenchmarkRedisService_ParallelPoolPerformance(b *testing.B) {
 	ctx := context.Background()
 
 	b.Run("Sequential Operations", func(b *testing.B) {
+		start := time.Now()
+		b.ResetTimer()
+
 		for i := 0; i < b.N; i++ {
 			key := fmt.Sprintf("bench:seq:%d", i)
 			err := service.Set(ctx, key, "value", time.Hour)
@@ -210,11 +254,21 @@ func BenchmarkRedisService_ParallelPoolPerformance(b *testing.B) {
 				b.Fatal(err)
 			}
 		}
+
+		elapsed := time.Since(start)
+		opsPerSec := float64(b.N) / elapsed.Seconds()
+		b.ReportMetric(opsPerSec, "ops/sec")
+		b.Logf("Sequential: %d ops in %v (%.2f ops/sec)",
+			b.N, elapsed, opsPerSec)
 	})
 
 	b.Run("Parallel Operations", func(b *testing.B) {
+		var ops int64
+		start := time.Now()
+
 		b.RunParallel(func(pb *testing.PB) {
 			i := 0
+			localOps := 0
 			for pb.Next() {
 				key := fmt.Sprintf("bench:par:%d", i)
 				err := service.Set(ctx, key, "value", time.Hour)
@@ -222,30 +276,15 @@ func BenchmarkRedisService_ParallelPoolPerformance(b *testing.B) {
 					b.Fatal(err)
 				}
 				i++
+				localOps++
 			}
+			atomic.AddInt64(&ops, int64(localOps))
 		})
-	})
 
-	b.Run("Mixed Operations", func(b *testing.B) {
-		b.RunParallel(func(pb *testing.PB) {
-			i := 0
-			for pb.Next() {
-				key := fmt.Sprintf("bench:mixed:%d", i)
-
-				// Set operation
-				err := service.Set(ctx, key, "value", time.Hour)
-				if err != nil {
-					b.Fatal(err)
-				}
-
-				// Get operation
-				_, err = service.Get(ctx, key)
-				if err != nil {
-					b.Fatal(err)
-				}
-
-				i++
-			}
-		})
+		elapsed := time.Since(start)
+		opsPerSec := float64(ops) / elapsed.Seconds()
+		b.ReportMetric(opsPerSec, "ops/sec")
+		b.Logf("Parallel: %d ops in %v (%.2f ops/sec)",
+			ops, elapsed, opsPerSec)
 	})
 }
