@@ -15,6 +15,7 @@ type Config struct {
 	Redis   RedisConfig   `mapstructure:"redis"`
 	Pool    PoolConfig    `mapstructure:"pool"`
 	Bulk    BulkConfig    `mapstructure:"bulk"`
+	Circuit CircuitConfig `mapstructure:"circuit"`
 	Logging LoggingConfig `mapstructure:"logging"`
 }
 
@@ -49,6 +50,13 @@ type BulkConfig struct {
 	FlushInterval   int  `mapstructure:"flush_interval"`
 	MaxRetries      int  `mapstructure:"max_retries"`
 	ConcurrentFlush bool `mapstructure:"concurrent_flush"`
+}
+
+type CircuitConfig struct {
+	Status       bool  `mapstructure:"status"`        // Enable/disable circuit breaker
+	Threshold    int64 `mapstructure:"threshold"`     // Number of failures before opening
+	ResetTimeout int   `mapstructure:"reset_timeout"` // Time in seconds to wait before reset
+	MaxHalfOpen  int32 `mapstructure:"max_half_open"` // Max concurrent requests in half-open state
 }
 
 // LoggingConfig holds logging configuration

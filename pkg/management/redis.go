@@ -19,6 +19,7 @@ type RedisService struct {
 	keyMgr    *KeyManager
 	bulkQueue chan BulkOperation
 	mu        sync.RWMutex
+	cb        *CircuitBreaker
 }
 
 func NewRedisService(cfg *config.Config) (*RedisService, error) {
@@ -45,6 +46,15 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 
 	if cfg.Bulk.Status {
 		service.startBulkProcessor()
+	}
+
+	// Initialize circuit breaker if enabled
+	if cfg.Circuit.Status {
+		service.cb = NewCircuitBreaker(
+			cfg.Circuit.Threshold,
+			time.Duration(cfg.Circuit.ResetTimeout)*time.Second,
+			cfg.Circuit.MaxHalfOpen,
+		)
 	}
 
 	return service, nil
@@ -109,8 +119,18 @@ func (rs *RedisService) AddBulkOperation(ctx context.Context, command string, ke
 	}
 }
 
-// Set stores a key-value pair in Redis with an expiration time
+// Modify Set method to use circuit breaker if enabled
 func (rs *RedisService) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
+	if rs.cb != nil {
+		return rs.cb.Execute(func() error {
+			return rs.set(ctx, key, value, expiration)
+		})
+	}
+	return rs.set(ctx, key, value, expiration)
+}
+
+// Set stores a key-value pair in Redis with an expiration time
+func (rs *RedisService) set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
 	if rs.cfg.Bulk.Status {
 		return rs.AddBulkOperation(ctx, "SET", key, value, expiration)
 	}
@@ -153,8 +173,22 @@ func (rs *RedisService) Set(ctx context.Context, key string, value interface{}, 
 	return fmt.Errorf("failed to set key after %d attempts: %v", rs.cfg.Redis.RetryAttempts, setErr)
 }
 
-// Get retrieves a value from Redis by key
+// Modify Get method similarly
 func (rs *RedisService) Get(ctx context.Context, key string) (string, error) {
+	if rs.cb != nil {
+		var result string
+		err := rs.cb.Execute(func() error {
+			var err error
+			result, err = rs.get(ctx, key)
+			return err
+		})
+		return result, err
+	}
+	return rs.get(ctx, key)
+}
+
+// Get retrieves a value from Redis by key
+func (rs *RedisService) get(ctx context.Context, key string) (string, error) {
 	client := rs.getClient()
 	if client == nil {
 		return "", fmt.Errorf("redis client is not initialized")

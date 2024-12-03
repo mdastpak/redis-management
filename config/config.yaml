@@ -31,3 +31,10 @@ logging:
   format: "json"  # Log format (json or text)
   output: "stdout"  # Output destination (stdout, file)
   file_path: ""  # Log file path if output is file
+
+circuit:
+  status: true # Enable/disable circuit breaker
+  threshold: 5 # Number of failed operations to trip the circuit
+  reset_timeout: 10  # Time to wait before resetting the circuit in seconds
+  max_half_open: 2 # Maximum number of half-open attempts before resetting the circuit
+
