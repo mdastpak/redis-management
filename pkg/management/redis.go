@@ -138,3 +138,12 @@ func (rs *RedisService) getClient() *redis.Client {
 	}
 	return rs.client
 }
+
+// Ping checks if Redis is responding
+func (rs *RedisService) Ping(ctx context.Context) error {
+	client := rs.getClient()
+	if client == nil {
+		return fmt.Errorf("redis client is not initialized")
+	}
+	return client.Ping(ctx).Err()
+}
