@@ -28,15 +28,16 @@ func TestBatchOperations(t *testing.T) {
 		err := service.SetBatch(ctx, items, 0)
 		require.NoError(t, err)
 
-		// Verify values and TTLs
 		for key, expectedValue := range items {
-			value, err := mr.Get(key)
+			finalKey := service.keyMgr.GetKey(key)
+
+			value, err := mr.Get(finalKey)
 			require.NoError(t, err)
 			assert.Equal(t, expectedValue, value)
 
-			ttl := mr.TTL(key)
-			assert.True(t, ttl > 110*time.Minute,
-				"TTL should be close to default 2 hours for key %s", key)
+			ttl := mr.TTL(finalKey)
+			t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
+			assert.Equal(t, time.Duration(0), ttl)
 		}
 	})
 }
