@@ -4,6 +4,7 @@ package management
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -41,6 +42,7 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 
 	// Initialize pool if enabled
 	if cfg.Pool.Status {
+		log.Printf("Initializing connection pool with size: %d", cfg.Pool.Size)
 		if err := service.initPool(); err != nil {
 			return nil, err
 		}
@@ -48,6 +50,8 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 
 	// Initialize circuit breaker if enabled
 	if cfg.Circuit.Status {
+		log.Printf("Initializing circuit breaker with threshold: %d, reset timeout: %d seconds",
+			cfg.Circuit.Threshold, cfg.Circuit.ResetTimeout)
 		service.cb = NewCircuitBreaker(
 			cfg.Circuit.Threshold,
 			time.Duration(cfg.Circuit.ResetTimeout)*time.Second,
@@ -57,6 +61,8 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 
 	// Initialize bulk processor if enabled
 	if cfg.Bulk.Status {
+		log.Printf("Starting bulk processor with batch size: %d, flush interval: %d ms", cfg.Bulk.BatchSize, cfg.Bulk.FlushInterval)
+
 		service.startBulkProcessor()
 	}
 
