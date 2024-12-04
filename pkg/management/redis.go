@@ -147,3 +147,14 @@ func (rs *RedisService) Ping(ctx context.Context) error {
 	}
 	return client.Ping(ctx).Err()
 }
+
+// GetPoolStats returns current pool statistics with additional safety checks
+func (rs *RedisService) GetPoolStats() *redis.PoolStats {
+	rs.mu.RLock()
+	defer rs.mu.RUnlock()
+
+	if rs.pool == nil {
+		return nil
+	}
+	return rs.pool.PoolStats()
+}
