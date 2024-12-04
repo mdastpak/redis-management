@@ -4,6 +4,7 @@ package management
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -11,10 +12,18 @@ import (
 func (rs *RedisService) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
 	if rs.cb != nil && rs.cfg.Circuit.Status {
 		return rs.cb.Execute(func() error {
+			log.Printf("Setting 1 key %s with ttl %v", key, expiration)
 			return rs.set(ctx, key, value, expiration)
 		})
 	}
+	log.Printf("Setting 2 key %s with ttl %v", key, expiration)
 	return rs.set(ctx, key, value, expiration)
+}
+
+// SetWithDefaultTTL stores a value with configured default TTL
+func (rs *RedisService) SetWithDefaultTTL(ctx context.Context, key string, value interface{}) error {
+	log.Printf("Setting key %s with ttl %v", key, rs.cfg.Redis.TTL)
+	return rs.Set(ctx, key, value, rs.cfg.Redis.TTL)
 }
 
 // SetBatch stores multiple key-value pairs in a single operation
@@ -27,12 +36,19 @@ func (rs *RedisService) SetBatch(ctx context.Context, items map[string]interface
 	return rs.setBatch(ctx, items, expiration)
 }
 
+// SetBatchWithDefaultTTL stores multiple values with configured default TTL
+func (rs *RedisService) SetBatchWithDefaultTTL(ctx context.Context, items map[string]interface{}) error {
+	return rs.SetBatch(ctx, items, rs.cfg.Redis.TTL)
+}
+
 // Set stores a key-value pair in Redis with an expiration time
 func (rs *RedisService) set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
 	if rs.cfg.Bulk.Status {
+		log.Printf("Adding bulk operation for key %s with ttl %v", key, expiration)
 		return rs.AddBulkOperation(ctx, "SET", key, value, expiration)
 	}
 
+	log.Printf("Setting key %s with ttl %v", key, expiration)
 	client := rs.getClient()
 	if client == nil {
 		return fmt.Errorf("redis client is not initialized")

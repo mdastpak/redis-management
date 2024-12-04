@@ -5,6 +5,7 @@ redis:
   password: ""
   db: "0-5"  # Can be single number or range (e.g., "0" or "0-5")
   key_prefix: ""  # Optional prefix for all keys
+  ttl: 60 # Default TTL for keys in seconds
   timeout: 5  # Connection timeout in seconds
   hash_keys: true  # Whether to hash keys using SHA-256
   health_check_interval: 30  # Health check interval in seconds

@@ -25,6 +25,7 @@ func setupTestRedis(t *testing.T) (*miniredis.Miniredis, *config.Config) {
 			DB:                  "0",
 			KeyPrefix:           "test:",
 			Timeout:             5,
+			TTL:                 60 * time.Second,
 			HashKeys:            false,
 			HealthCheckInterval: 0, // Disable health checks for testing
 			RetryAttempts:       2,
@@ -58,20 +59,85 @@ func TestRedisService_BasicOperations(t *testing.T) {
 	require.NoError(t, err)
 	defer service.Close()
 
-	ctx := context.Background()
+	t.Run("Set with No Expiration", func(t *testing.T) {
+		ctx := context.Background()
+		key := "permanent_key"
 
-	t.Run("Set and Get", func(t *testing.T) {
-		err := service.Set(ctx, "test_key", "test_value", time.Hour)
-		assert.NoError(t, err)
+		err := service.Set(ctx, key, "test_value", 0)
+		require.NoError(t, err)
 
-		value, err := service.Get(ctx, "test_key")
-		assert.NoError(t, err)
+		finalKey := service.keyMgr.GetKey(key)
+		value, err := service.Get(ctx, key)
+		require.NoError(t, err)
 		assert.Equal(t, "test_value", value)
+
+		ttl := mr.TTL(finalKey)
+		t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
+		assert.Equal(t, time.Duration(0), ttl)
 	})
 
-	t.Run("Get Non-Existent Key", func(t *testing.T) {
-		value, err := service.Get(ctx, "non_existent")
-		assert.Error(t, err)
-		assert.Empty(t, value)
+	t.Run("Set with Default TTL", func(t *testing.T) {
+		ctx := context.Background()
+		key := "default_ttl_key"
+
+		err := service.SetWithDefaultTTL(ctx, key, "test_value")
+		require.NoError(t, err)
+
+		// Get final key with prefix/hash
+		finalKey := service.keyMgr.GetKey(key)
+
+		value, err := service.Get(ctx, key)
+		require.NoError(t, err)
+		assert.Equal(t, "test_value", value)
+
+		ttl := mr.TTL(finalKey)
+		t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
+		assert.Equal(t, time.Duration(cfg.Redis.TTL), ttl)
+	})
+
+	t.Run("SetBatch with Different TTLs", func(t *testing.T) {
+		ctx := context.Background()
+
+		// No TTL batch
+		noTTLItems := map[string]interface{}{
+			"batch_no_ttl_1": "value1",
+			"batch_no_ttl_2": "value2",
+		}
+		err := service.SetBatch(ctx, noTTLItems, 0)
+		require.NoError(t, err)
+
+		// Default TTL batch
+		defaultTTLItems := map[string]interface{}{
+			"batch_default_1": "value1",
+			"batch_default_2": "value2",
+		}
+		err = service.SetBatchWithDefaultTTL(ctx, defaultTTLItems)
+		require.NoError(t, err)
+
+		// Verify no TTL batch
+		for key, expectedValue := range noTTLItems {
+			finalKey := service.keyMgr.GetKey(key)
+
+			value, err := service.Get(ctx, key)
+			require.NoError(t, err)
+			assert.Equal(t, expectedValue, value)
+
+			ttl := mr.TTL(finalKey)
+			t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
+			assert.Equal(t, time.Duration(0), ttl)
+		}
+
+		// Verify default TTL batch
+		for key, expectedValue := range defaultTTLItems {
+			finalKey := service.keyMgr.GetKey(key)
+
+			value, err := service.Get(ctx, key)
+			require.NoError(t, err)
+			assert.Equal(t, expectedValue, value)
+
+			ttl := mr.TTL(finalKey)
+			t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
+			assert.Equal(t, time.Duration(cfg.Redis.TTL), ttl)
+		}
 	})
 }

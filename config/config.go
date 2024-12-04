@@ -26,6 +26,7 @@ type RedisConfig struct {
 	Password            string        `mapstructure:"password"`
 	DB                  string        `mapstructure:"db"`
 	KeyPrefix           string        `mapstructure:"key_prefix"`
+	TTL                 time.Duration `mapstructure:"ttl"`
 	Timeout             int           `mapstructure:"timeout"`
 	HashKeys            bool          `mapstructure:"hash_keys"`
 	HealthCheckInterval int           `mapstructure:"health_check_interval"`
