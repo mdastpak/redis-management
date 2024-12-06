@@ -3,6 +3,7 @@ package management
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -139,5 +140,156 @@ func TestRedisService_BasicOperations(t *testing.T) {
 			t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
 			assert.Equal(t, time.Duration(cfg.Redis.TTL), ttl)
 		}
+	})
+}
+
+func TestTTLOperations(t *testing.T) {
+	mr, cfg := setupTestRedis(t)
+	defer mr.Close()
+
+	service, err := NewRedisService(cfg)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+
+	t.Run("GetTTL and SetTTL Single Key", func(t *testing.T) {
+		key := "ttl_test_key"
+		value := "test_value"
+		expectedTTL := 1 * time.Hour
+
+		// Set key with value
+		err := service.Set(ctx, key, value, expectedTTL)
+		require.NoError(t, err)
+
+		// Get TTL
+		finalKey := service.keyMgr.GetKey(key)
+		ttl, err := service.GetTTL(ctx, key)
+		require.NoError(t, err)
+		t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
+		assert.Equal(t, expectedTTL, ttl)
+
+		// Update TTL
+		newTTL := 30 * time.Minute
+		err = service.SetTTL(ctx, key, newTTL)
+		require.NoError(t, err)
+
+		// Verify updated TTL
+		ttl, err = service.GetTTL(ctx, key)
+		require.NoError(t, err)
+		t.Logf("Updated TTL for key %s (final: %s): %v", key, finalKey, ttl)
+		assert.Equal(t, newTTL, ttl)
+
+		// Verify value remains unchanged
+		value, err = service.Get(ctx, key)
+		require.NoError(t, err)
+		assert.Equal(t, "test_value", value)
+	})
+
+	t.Run("GetBatchTTL and SetBatchTTL", func(t *testing.T) {
+		keys := []string{
+			"batch_ttl_1",
+			"batch_ttl_2",
+			"batch_ttl_3",
+		}
+		initialTTL := 2 * time.Hour
+
+		// Set initial keys with values and TTL
+		for _, key := range keys {
+			err := service.Set(ctx, key, fmt.Sprintf("value_%s", key), initialTTL)
+			require.NoError(t, err)
+		}
+
+		// Get batch TTL
+		ttls, err := service.GetBatchTTL(ctx, keys)
+		require.NoError(t, err)
+
+		for key, ttl := range ttls {
+			finalKey := service.keyMgr.GetKey(key)
+			t.Logf("Initial TTL for key %s (final: %s): %v", key, finalKey, ttl)
+			assert.Equal(t, initialTTL, ttl)
+		}
+
+		// Update batch TTL
+		newTTL := 45 * time.Minute
+		err = service.SetBatchTTL(ctx, keys, newTTL)
+		require.NoError(t, err)
+
+		// Verify updated TTLs
+		ttls, err = service.GetBatchTTL(ctx, keys)
+		require.NoError(t, err)
+
+		for key, ttl := range ttls {
+			finalKey := service.keyMgr.GetKey(key)
+			t.Logf("Updated TTL for key %s (final: %s): %v", key, finalKey, ttl)
+			assert.Equal(t, newTTL, ttl)
+
+			// Verify values remain unchanged
+			value, err := service.Get(ctx, key)
+			require.NoError(t, err)
+			assert.Equal(t, fmt.Sprintf("value_%s", key), value)
+		}
+	})
+
+	t.Run("GetTTL Non-Existent Key", func(t *testing.T) {
+		key := "non_existent_key"
+		ttl, err := service.GetTTL(ctx, key)
+		require.NoError(t, err)
+		assert.Equal(t, time.Duration(-2), ttl, "Non-existent key should return -2")
+	})
+
+	t.Run("SetTTL Non-Existent Key", func(t *testing.T) {
+		key := "non_existent_key"
+		err := service.SetTTL(ctx, key, time.Hour)
+		require.Error(t, err, "Setting TTL on non-existent key should fail")
+	})
+
+	t.Run("GetBatchTTL Mixed Keys", func(t *testing.T) {
+		// Prepare: one existing key, one non-existent
+		existingKey := "existing_key"
+		err := service.Set(ctx, existingKey, "value", time.Hour)
+		require.NoError(t, err)
+
+		keys := []string{
+			existingKey,
+			"non_existent_key",
+		}
+
+		ttls, err := service.GetBatchTTL(ctx, keys)
+		require.NoError(t, err)
+
+		finalExistingKey := service.keyMgr.GetKey(existingKey)
+		t.Logf("TTL for existing key %s (final: %s): %v", existingKey, finalExistingKey, ttls[existingKey])
+		assert.Equal(t, time.Hour, ttls[existingKey])
+
+		finalNonExistentKey := service.keyMgr.GetKey("non_existent_key")
+		t.Logf("TTL for non-existent key (final: %s): %v", finalNonExistentKey, ttls["non_existent_key"])
+		assert.Equal(t, time.Duration(-2), ttls["non_existent_key"])
+	})
+
+	t.Run("Zero TTL Operations", func(t *testing.T) {
+		key := "zero_ttl_key"
+
+		// Set key with no TTL
+		err := service.Set(ctx, key, "value", 0)
+		require.NoError(t, err)
+
+		// Verify no TTL
+		ttl, err := service.GetTTL(ctx, key)
+		require.NoError(t, err)
+		assert.Equal(t, time.Duration(-1), ttl, "Key with no TTL should return -1")
+
+		// Set TTL
+		err = service.SetTTL(ctx, key, time.Hour)
+		require.NoError(t, err)
+
+		// Remove TTL by setting it to 0
+		err = service.SetTTL(ctx, key, 0)
+		require.NoError(t, err)
+
+		// Verify TTL was removed
+		ttl, err = service.GetTTL(ctx, key)
+		require.NoError(t, err)
+		assert.Equal(t, time.Duration(-1), ttl, "Key should have no TTL after setting it to 0")
 	})
 }
