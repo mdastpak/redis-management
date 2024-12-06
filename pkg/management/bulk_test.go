@@ -8,18 +8,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	bulkOperationWaitTime = 2 * time.Second
 )
 
 func TestBulkOperations(t *testing.T) {
 	mr, cfg := setupTestRedis(t)
 	defer mr.Close()
-
-	cfg.Redis.TTL = 30 * time.Minute
-	cfg.Bulk.Status = true
-	cfg.Bulk.BatchSize = 5
-	cfg.Bulk.FlushInterval = 1
 
 	service, err := NewRedisService(cfg)
 	require.NoError(t, err)
@@ -37,25 +35,52 @@ func TestBulkOperations(t *testing.T) {
 				key := fmt.Sprintf("bulk_key_%d", i)
 				value := fmt.Sprintf("value_%d", i)
 
-				err := service.AddBulkOperation(ctx, "SET", key, value, 0)
+				err := service.AddBulkOperation(ctx, "SET", key, value, cfg.Redis.TTL)
 				require.NoError(t, err)
 			}(i)
 		}
 
 		wg.Wait()
-		time.Sleep(2 * time.Second)
+		time.Sleep(bulkOperationWaitTime) // Allow bulk operations to complete
 
 		for i := 0; i < numOperations; i++ {
 			key := fmt.Sprintf("bulk_key_%d", i)
-			finalKey := service.keyMgr.GetKey(key)
+			expectedValue := fmt.Sprintf("value_%d", i)
 
-			value, err := mr.Get(finalKey)
+			assertKeyValue(t, service, key, expectedValue)
+			assertTTL(t, service, key, cfg.Redis.TTL)
+		}
+	})
+
+	t.Run("Bulk Operations with Mixed TTLs", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Test mixed TTL values
+		operations := []struct {
+			key   string
+			value string
+			ttl   time.Duration
+		}{
+			{"mixed_ttl_1", "value1", 0},             // No TTL
+			{"mixed_ttl_2", "value2", cfg.Redis.TTL}, // Default TTL
+			{"mixed_ttl_3", "value3", time.Hour},     // Custom TTL
+		}
+
+		for _, op := range operations {
+			err := service.AddBulkOperation(ctx, "SET", op.key, op.value, op.ttl)
 			require.NoError(t, err)
-			assert.Equal(t, fmt.Sprintf("value_%d", i), value)
+		}
 
-			ttl := mr.TTL(finalKey)
-			t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
-			assert.Equal(t, time.Duration(0), ttl)
+		time.Sleep(bulkOperationWaitTime)
+
+		// Verify each operation
+		for _, op := range operations {
+			assertKeyValue(t, service, op.key, op.value)
+			expectedTTL := op.ttl
+			if expectedTTL == 0 {
+				expectedTTL = time.Duration(-1)
+			}
+			assertTTL(t, service, op.key, expectedTTL)
 		}
 	})
 }

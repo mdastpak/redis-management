@@ -86,9 +86,9 @@ func (bp *BulkProcessor) processQueue(ctx context.Context) {
 	}
 }
 
-func (bp *BulkProcessor) processBatch(batch []BulkOperation) {
+func (bp *BulkProcessor) processBatch(batch []BulkOperation) error {
 	if len(batch) == 0 {
-		return
+		return nil
 	}
 
 	pipe := bp.service.client.Pipeline()
@@ -113,6 +113,7 @@ func (bp *BulkProcessor) processBatch(batch []BulkOperation) {
 		// Add all operations to pipeline
 		for _, op := range ops {
 			finalKey := bp.service.keyMgr.GetKey(op.Key)
+			// Set value with expiration in one command
 			pipe.Set(context.Background(), finalKey, op.Value, op.ExpiresAt)
 		}
 
@@ -125,4 +126,5 @@ func (bp *BulkProcessor) processBatch(batch []BulkOperation) {
 		}
 	}
 
+	return nil
 }

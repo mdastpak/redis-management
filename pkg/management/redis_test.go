@@ -14,6 +14,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Helper function for checking TTL
+func assertTTL(t *testing.T, service *RedisService, key string, expectedTTL time.Duration) {
+	ttl, err := service.GetTTL(context.Background(), key)
+	require.NoError(t, err)
+	t.Logf("TTL for key %s: %v", key, ttl)
+	assert.Equal(t, expectedTTL, ttl)
+}
+
+// Helper function for checking key value
+func assertKeyValue(t *testing.T, service *RedisService, key string, expectedValue interface{}) {
+	value, err := service.Get(context.Background(), key)
+	require.NoError(t, err)
+	assert.Equal(t, expectedValue, value)
+}
+
+// Helper function to be used across all test files
 func setupTestRedis(t *testing.T) (*miniredis.Miniredis, *config.Config) {
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
@@ -63,37 +79,25 @@ func TestRedisService_BasicOperations(t *testing.T) {
 	t.Run("Set with No Expiration", func(t *testing.T) {
 		ctx := context.Background()
 		key := "permanent_key"
+		value := "test_value"
 
-		err := service.Set(ctx, key, "test_value", 0)
+		err := service.Set(ctx, key, value, 0)
 		require.NoError(t, err)
 
-		finalKey := service.keyMgr.GetKey(key)
-		value, err := service.Get(ctx, key)
-		require.NoError(t, err)
-		assert.Equal(t, "test_value", value)
-
-		ttl := mr.TTL(finalKey)
-		t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
-		assert.Equal(t, time.Duration(0), ttl)
+		assertKeyValue(t, service, key, value)
+		assertTTL(t, service, key, time.Duration(-1))
 	})
 
 	t.Run("Set with Default TTL", func(t *testing.T) {
 		ctx := context.Background()
 		key := "default_ttl_key"
+		value := "test_value"
 
-		err := service.SetWithDefaultTTL(ctx, key, "test_value")
+		err := service.SetWithDefaultTTL(ctx, key, value)
 		require.NoError(t, err)
 
-		// Get final key with prefix/hash
-		finalKey := service.keyMgr.GetKey(key)
-
-		value, err := service.Get(ctx, key)
-		require.NoError(t, err)
-		assert.Equal(t, "test_value", value)
-
-		ttl := mr.TTL(finalKey)
-		t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
-		assert.Equal(t, time.Duration(cfg.Redis.TTL), ttl)
+		assertKeyValue(t, service, key, value)
+		assertTTL(t, service, key, cfg.Redis.TTL)
 	})
 
 	t.Run("SetBatch with Different TTLs", func(t *testing.T) {
@@ -117,28 +121,45 @@ func TestRedisService_BasicOperations(t *testing.T) {
 
 		// Verify no TTL batch
 		for key, expectedValue := range noTTLItems {
-			finalKey := service.keyMgr.GetKey(key)
-
-			value, err := service.Get(ctx, key)
-			require.NoError(t, err)
-			assert.Equal(t, expectedValue, value)
-
-			ttl := mr.TTL(finalKey)
-			t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
-			assert.Equal(t, time.Duration(0), ttl)
+			assertKeyValue(t, service, key, expectedValue)
+			assertTTL(t, service, key, time.Duration(-1))
 		}
 
 		// Verify default TTL batch
 		for key, expectedValue := range defaultTTLItems {
-			finalKey := service.keyMgr.GetKey(key)
+			assertKeyValue(t, service, key, expectedValue)
+			assertTTL(t, service, key, cfg.Redis.TTL)
+		}
+	})
 
-			value, err := service.Get(ctx, key)
-			require.NoError(t, err)
-			assert.Equal(t, expectedValue, value)
+	t.Run("SetBatch with Zero TTL", func(t *testing.T) {
+		ctx := context.Background()
 
-			ttl := mr.TTL(finalKey)
-			t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
-			assert.Equal(t, time.Duration(cfg.Redis.TTL), ttl)
+		// Explicit zero TTL
+		zeroTTLItems := map[string]interface{}{
+			"zero_ttl_1": "value1",
+			"zero_ttl_2": "value2",
+		}
+		err := service.SetBatch(ctx, zeroTTLItems, 0)
+		require.NoError(t, err)
+
+		// No TTL specified (should be same as zero)
+		noTTLItems := map[string]interface{}{
+			"no_ttl_1": "value1",
+			"no_ttl_2": "value2",
+		}
+		err = service.SetBatch(ctx, noTTLItems, 0)
+		require.NoError(t, err)
+
+		// Verify both behave the same
+		for key, expectedValue := range zeroTTLItems {
+			assertKeyValue(t, service, key, expectedValue)
+			assertTTL(t, service, key, time.Duration(-1))
+		}
+
+		for key, expectedValue := range noTTLItems {
+			assertKeyValue(t, service, key, expectedValue)
+			assertTTL(t, service, key, time.Duration(-1))
 		}
 	})
 }

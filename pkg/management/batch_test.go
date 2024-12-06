@@ -13,7 +13,6 @@ func TestBatchOperations(t *testing.T) {
 	mr, cfg := setupTestRedis(t)
 	defer mr.Close()
 
-	cfg.Redis.TTL = 2 * time.Hour
 	service, err := NewRedisService(cfg)
 	require.NoError(t, err)
 	defer service.Close()
@@ -25,19 +24,18 @@ func TestBatchOperations(t *testing.T) {
 			"batch_key2": "value2",
 		}
 
-		err := service.SetBatch(ctx, items, 0)
+		err := service.SetBatchWithDefaultTTL(ctx, items)
 		require.NoError(t, err)
 
 		for key, expectedValue := range items {
-			finalKey := service.keyMgr.GetKey(key)
-
-			value, err := mr.Get(finalKey)
+			value, err := service.Get(ctx, key)
 			require.NoError(t, err)
 			assert.Equal(t, expectedValue, value)
 
-			ttl := mr.TTL(finalKey)
-			t.Logf("TTL for key %s (final: %s): %v", key, finalKey, ttl)
-			assert.Equal(t, time.Duration(0), ttl)
+			ttl, err := service.GetTTL(ctx, key)
+			require.NoError(t, err)
+			t.Logf("TTL for key %s: %v", key, ttl)
+			assert.Equal(t, time.Duration(cfg.Redis.TTL), ttl)
 		}
 	})
 }

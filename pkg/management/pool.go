@@ -184,8 +184,8 @@ func (rs *RedisService) startPoolHealthCheck() {
 		ctx, cancel := context.WithTimeout(context.Background(),
 			time.Duration(rs.cfg.Redis.Timeout)*time.Second)
 
-		// Perform health check
-		err := rs.pool.Ping(ctx).Err()
+		// Use Ping for basic health check
+		err := rs.Ping(ctx)
 		stats := rs.getPoolStats()
 
 		if err != nil {

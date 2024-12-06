@@ -62,23 +62,23 @@ func (rs *RedisService) set(ctx context.Context, key string, value interface{}, 
 	// Perform SET operation with retry logic
 	var setErr error
 	for attempt := 0; attempt <= rs.cfg.Redis.RetryAttempts; attempt++ {
-		err := client.Set(ctx, finalKey, value, expiration).Err()
-		if err == nil {
-			return nil
-		}
-
-		setErr = err
-		if attempt < rs.cfg.Redis.RetryAttempts {
-			// Calculate backoff time
-			backoff := time.Duration(attempt+1) * rs.cfg.Redis.RetryDelay
-			if backoff > rs.cfg.Redis.MaxRetryBackoff {
-				backoff = rs.cfg.Redis.MaxRetryBackoff
+		if err := client.Set(ctx, finalKey, value, expiration).Err(); err != nil {
+			setErr = err
+			if attempt < rs.cfg.Redis.RetryAttempts {
+				// Calculate backoff time
+				backoff := time.Duration(attempt+1) * rs.cfg.Redis.RetryDelay
+				if backoff > rs.cfg.Redis.MaxRetryBackoff {
+					backoff = rs.cfg.Redis.MaxRetryBackoff
+				}
+				time.Sleep(backoff)
+				continue
 			}
-			time.Sleep(backoff)
+			return fmt.Errorf("failed to set key after %d attempts: %v", rs.cfg.Redis.RetryAttempts, setErr)
 		}
+		break
 	}
 
-	return fmt.Errorf("failed to set key after %d attempts: %v", rs.cfg.Redis.RetryAttempts, setErr)
+	return nil
 }
 
 // setBatch performs the actual batch set operation
