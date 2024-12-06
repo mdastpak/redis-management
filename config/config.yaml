@@ -12,6 +12,7 @@ redis:
   retry_attempts: 3  # Number of retry attempts for failed operations
   retry_delay: 1000  # Delay between retries in milliseconds
   max_retry_backoff: 5000  # Maximum backoff time in milliseconds
+  shutdown_timeout: 60  # Timeout for shutdown in seconds
 
 pool:
   status: true  # Enable/disable connection pooling

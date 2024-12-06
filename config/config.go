@@ -33,6 +33,7 @@ type RedisConfig struct {
 	RetryAttempts       int           `mapstructure:"retry_attempts"`
 	RetryDelay          time.Duration `mapstructure:"retry_delay"`
 	MaxRetryBackoff     time.Duration `mapstructure:"max_retry_backoff"`
+	ShutdownTimeout     time.Duration `mapstructure:"shutdown_timeout"`
 }
 
 // PoolConfig holds connection pool configuration

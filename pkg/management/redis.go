@@ -92,13 +92,13 @@ func (rs *RedisService) Close() error {
 
 	var errs []error
 
-	// // Try graceful shutdown first
-	// if rs.operationManager != nil {
-	// 	ctx := context.Background()
-	// 	if err := rs.operationManager.GetShutdownManager().Shutdown(ctx); err != nil {
-	// 		errs = append(errs, fmt.Errorf("graceful shutdown failed: %v", err))
-	// 	}
-	// }
+	// Try graceful shutdown first
+	if rs.operationManager != nil {
+		ctx := context.Background()
+		if err := rs.operationManager.GetShutdownManager().Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("graceful shutdown failed: %v", err))
+		}
+	}
 
 	// Close client if it exists
 	if rs.client != nil {

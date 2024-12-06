@@ -72,6 +72,8 @@ func NewClientWithCustomConfig(customConfig map[string]interface{}) (*Client, er
 			cfg.Redis.RetryDelay = value.(time.Duration)
 		case "redis_max_retry_backoff":
 			cfg.Redis.MaxRetryBackoff = value.(time.Duration)
+		case "redis_shutdown_timeout":
+			cfg.Redis.ShutdownTimeout = value.(time.Duration)
 
 		// Pool configuration
 		case "pool_status":

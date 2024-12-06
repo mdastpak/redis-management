@@ -48,6 +48,7 @@ func setupTestRedis(t *testing.T) (*miniredis.Miniredis, *config.Config) {
 			RetryAttempts:       2,
 			RetryDelay:          100 * time.Millisecond,
 			MaxRetryBackoff:     1000 * time.Millisecond,
+			ShutdownTimeout:     10 * time.Second,
 		},
 		Pool: config.PoolConfig{
 			Status:      true,
