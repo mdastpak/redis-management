@@ -9,6 +9,30 @@ import (
 )
 
 func (rs *RedisService) GetTTL(ctx context.Context, key string) (time.Duration, error) {
+	return rs.operationManager.ExecuteDurationOp(ctx, "TTL", func() (time.Duration, error) {
+		return rs.getTTL(ctx, key)
+	})
+}
+
+func (rs *RedisService) SetTTL(ctx context.Context, key string, ttl time.Duration) error {
+	return rs.operationManager.ExecuteWithLock(ctx, "EXPIRE", func() error {
+		return rs.setTTL(ctx, key, ttl)
+	})
+}
+
+func (rs *RedisService) GetBatchTTL(ctx context.Context, keys []string) (map[string]time.Duration, error) {
+	return rs.operationManager.ExecuteBatchDurationOp(ctx, "TTL", func() (map[string]time.Duration, error) {
+		return rs.getBatchTTL(ctx, keys)
+	})
+}
+
+func (rs *RedisService) SetBatchTTL(ctx context.Context, keys []string, ttl time.Duration) error {
+	return rs.operationManager.ExecuteWithLock(ctx, "EXPIRE", func() error {
+		return rs.setBatchTTL(ctx, keys, ttl)
+	})
+}
+
+func (rs *RedisService) getTTL(ctx context.Context, key string) (time.Duration, error) {
 	client := rs.getClient()
 	if client == nil {
 		return 0, fmt.Errorf("redis client is not initialized")
@@ -42,7 +66,7 @@ func (rs *RedisService) GetTTL(ctx context.Context, key string) (time.Duration, 
 	return ttl, nil
 }
 
-func (rs *RedisService) SetTTL(ctx context.Context, key string, ttl time.Duration) error {
+func (rs *RedisService) setTTL(ctx context.Context, key string, ttl time.Duration) error {
 	client := rs.getClient()
 	if client == nil {
 		return fmt.Errorf("redis client is not initialized")
@@ -82,7 +106,7 @@ func (rs *RedisService) SetTTL(ctx context.Context, key string, ttl time.Duratio
 	return nil
 }
 
-func (rs *RedisService) GetBatchTTL(ctx context.Context, keys []string) (map[string]time.Duration, error) {
+func (rs *RedisService) getBatchTTL(ctx context.Context, keys []string) (map[string]time.Duration, error) {
 	result := make(map[string]time.Duration)
 	pipe := rs.client.Pipeline()
 	defer pipe.Close()
@@ -159,7 +183,7 @@ func (rs *RedisService) GetBatchTTL(ctx context.Context, keys []string) (map[str
 	return result, nil
 }
 
-func (rs *RedisService) SetBatchTTL(ctx context.Context, keys []string, ttl time.Duration) error {
+func (rs *RedisService) setBatchTTL(ctx context.Context, keys []string, ttl time.Duration) error {
 	if len(keys) == 0 {
 		return nil
 	}

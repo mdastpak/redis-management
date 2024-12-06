@@ -14,13 +14,14 @@ import (
 )
 
 type RedisService struct {
-	cfg       *config.Config
-	client    *redis.Client
-	pool      *redis.Client
-	keyMgr    *KeyManager
-	bulkQueue chan BulkOperation
-	mu        sync.RWMutex
-	cb        *CircuitBreaker
+	cfg              *config.Config
+	client           *redis.Client
+	pool             *redis.Client
+	keyMgr           *KeyManager
+	bulkQueue        chan BulkOperation
+	mu               sync.RWMutex
+	cb               *CircuitBreaker
+	operationManager *OperationManager
 }
 
 func NewRedisService(cfg *config.Config) (*RedisService, error) {
@@ -34,6 +35,9 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 		keyMgr:    keyMgr,
 		bulkQueue: make(chan BulkOperation, cfg.Bulk.BatchSize),
 	}
+
+	// Initialize operation manager
+	service.operationManager = NewOperationManager(service)
 
 	// Initialize connection
 	if err := service.connect(); err != nil {
@@ -87,27 +91,46 @@ func (rs *RedisService) Close() error {
 	defer rs.mu.Unlock()
 
 	var errs []error
+
+	// // Try graceful shutdown first
+	// if rs.operationManager != nil {
+	// 	ctx := context.Background()
+	// 	if err := rs.operationManager.GetShutdownManager().Shutdown(ctx); err != nil {
+	// 		errs = append(errs, fmt.Errorf("graceful shutdown failed: %v", err))
+	// 	}
+	// }
+
+	// Close client if it exists
 	if rs.client != nil {
 		if err := rs.client.Close(); err != nil {
-			errs = append(errs, err)
+			errs = append(errs, fmt.Errorf("error closing client: %v", err))
 		}
+		rs.client = nil
 	}
 
+	// Close pool if it exists
 	if rs.pool != nil {
 		if err := rs.pool.Close(); err != nil {
-			errs = append(errs, err)
+			errs = append(errs, fmt.Errorf("error closing pool: %v", err))
 		}
+		rs.pool = nil
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("errors closing connections: %v", errs)
+		return fmt.Errorf("errors during shutdown: %v", errs)
 	}
 	return nil
 }
 
 func (rs *RedisService) startBulkProcessor() {
-	processor := NewBulkProcessor(rs)
-	processor.Start(context.Background())
+	if rs.cfg.Bulk.Status {
+
+		processor := NewBulkProcessor(rs)
+		processor.Start(context.Background())
+
+		// // Use operation manager's shutdown manager to start bulk processor
+		// rs.operationManager.GetShutdownManager().StartBulkProcessor(context.Background())
+	}
 }
 
 // Add bulk operation methods

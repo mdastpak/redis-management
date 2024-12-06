@@ -9,12 +9,15 @@ import (
 
 // Delete method with circuit breaker support
 func (rs *RedisService) Delete(ctx context.Context, key string) error {
-	if rs.cb != nil && rs.cfg.Circuit.Status {
-		return rs.cb.Execute(func() error {
-			return rs.delete(ctx, key)
-		})
-	}
-	return rs.delete(ctx, key)
+	return rs.operationManager.ExecuteWithLock(ctx, "DEL", func() error {
+
+		if rs.cb != nil && rs.cfg.Circuit.Status {
+			return rs.cb.Execute(func() error {
+				return rs.delete(ctx, key)
+			})
+		}
+		return rs.delete(ctx, key)
+	})
 }
 
 // delete performs the actual delete operation with retries and bulk support

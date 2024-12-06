@@ -11,30 +11,34 @@ import (
 
 // Modify Get method similarly
 func (rs *RedisService) Get(ctx context.Context, key string) (string, error) {
-	if rs.cb != nil && rs.cfg.Circuit.Status {
-		var result string
-		err := rs.cb.Execute(func() error {
-			var err error
-			result, err = rs.get(ctx, key)
-			return err
-		})
-		return result, err
-	}
-	return rs.get(ctx, key)
+	return rs.operationManager.ExecuteReadOp(ctx, "GET", func() (string, error) {
+		if rs.cb != nil && rs.cfg.Circuit.Status {
+			var result string
+			err := rs.cb.Execute(func() error {
+				var err error
+				result, err = rs.get(ctx, key)
+				return err
+			})
+			return result, err
+		}
+		return rs.get(ctx, key)
+	})
 }
 
 // GetBatch retrieves multiple values in a single operation
 func (rs *RedisService) GetBatch(ctx context.Context, keys []string) (map[string]string, error) {
-	if rs.cb != nil && rs.cfg.Circuit.Status {
-		var result map[string]string
-		err := rs.cb.Execute(func() error {
-			var err error
-			result, err = rs.getBatch(ctx, keys)
-			return err
-		})
-		return result, err
-	}
-	return rs.getBatch(ctx, keys)
+	return rs.operationManager.ExecuteBatchOp(ctx, "MGET", func() (map[string]string, error) {
+		if rs.cb != nil && rs.cfg.Circuit.Status {
+			var result map[string]string
+			err := rs.cb.Execute(func() error {
+				var err error
+				result, err = rs.getBatch(ctx, keys)
+				return err
+			})
+			return result, err
+		}
+		return rs.getBatch(ctx, keys)
+	})
 }
 
 // Get retrieves a value from Redis by key

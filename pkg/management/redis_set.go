@@ -9,12 +9,14 @@ import (
 
 // Modify Set method to use circuit breaker if enabled
 func (rs *RedisService) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
-	if rs.cb != nil && rs.cfg.Circuit.Status {
-		return rs.cb.Execute(func() error {
-			return rs.set(ctx, key, value, expiration)
-		})
-	}
-	return rs.set(ctx, key, value, expiration)
+	return rs.operationManager.ExecuteWithLock(ctx, "SET", func() error {
+		if rs.cb != nil && rs.cfg.Circuit.Status {
+			return rs.cb.Execute(func() error {
+				return rs.set(ctx, key, value, expiration)
+			})
+		}
+		return rs.set(ctx, key, value, expiration)
+	})
 }
 
 // SetWithDefaultTTL stores a value with configured default TTL
@@ -24,12 +26,14 @@ func (rs *RedisService) SetWithDefaultTTL(ctx context.Context, key string, value
 
 // SetBatch stores multiple key-value pairs in a single operation
 func (rs *RedisService) SetBatch(ctx context.Context, items map[string]interface{}, expiration time.Duration) error {
-	if rs.cb != nil && rs.cfg.Circuit.Status {
-		return rs.cb.Execute(func() error {
-			return rs.setBatch(ctx, items, expiration)
-		})
-	}
-	return rs.setBatch(ctx, items, expiration)
+	return rs.operationManager.ExecuteWithLock(ctx, "MSET", func() error {
+		if rs.cb != nil && rs.cfg.Circuit.Status {
+			return rs.cb.Execute(func() error {
+				return rs.setBatch(ctx, items, expiration)
+			})
+		}
+		return rs.setBatch(ctx, items, expiration)
+	})
 }
 
 // SetBatchWithDefaultTTL stores multiple values with configured default TTL
