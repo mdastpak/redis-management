@@ -15,7 +15,6 @@ type ShutdownManager struct {
 	shutdownCh     chan struct{}
 	timeout        time.Duration
 	isShuttingDown int32
-	mu             sync.RWMutex
 	wg             sync.WaitGroup
 }
 
