@@ -17,16 +17,21 @@ func TestBulkOperationsScalability(t *testing.T) {
 
 	for _, scale := range scales {
 		t.Run(fmt.Sprintf("Scale_%dx", scale), func(t *testing.T) {
+			ctx := context.Background()
+
+			rs, err := setupTestRedis()
+			require.NoError(t, err)
+			defer rs.Close()
+
 			// Calculate number of operations based on scale
 			numOperations := 10 * scale
-			mr, cfg := setupTestRedis(t)
-			defer mr.Close()
 
 			// Configure batch size according to scale
-			cfg.Bulk.BatchSize = 10 * scale
-			service, err := NewRedisService(cfg)
-			require.NoError(t, err)
-			defer service.Close()
+			rs.cfg.Bulk.BatchSize = 10 * scale
+
+			// service, err := NewRedisService(rs.cfg)
+			// require.NoError(t, err)
+			// defer service.Close()
 
 			// Track execution time and prepare error handling
 			start := time.Now()
@@ -43,7 +48,7 @@ func TestBulkOperationsScalability(t *testing.T) {
 					ctx := context.Background()
 
 					// Attempt bulk operation
-					err := service.AddBulkOperation(ctx, "SET", key, value, time.Hour)
+					err := rs.AddBulkOperation(ctx, "SET", key, value, time.Hour)
 					if err != nil {
 						errChan <- fmt.Errorf("operation %d failed: %v", i, err)
 					}
@@ -72,7 +77,7 @@ func TestBulkOperationsScalability(t *testing.T) {
 				expectedValue := fmt.Sprintf("value:%d", i)
 
 				// Verify each key-value pair
-				value, err := mr.Get(key)
+				value, err := rs.Get(ctx, key)
 				require.NoError(t, err, "Failed to get key %s", key)
 				assert.Equal(t, expectedValue, value,
 					"Value mismatch for key %s", key)
@@ -82,7 +87,7 @@ func TestBulkOperationsScalability(t *testing.T) {
 			t.Logf("Average time per operation: %.3f ms",
 				float64(elapsed.Milliseconds())/float64(numOperations))
 
-			stats := service.getPoolStats()
+			stats := rs.getPoolStats()
 			if stats != nil {
 				t.Logf("Pool stats - TotalConns: %d, IdleConns: %d",
 					stats.TotalConns, stats.IdleConns)
