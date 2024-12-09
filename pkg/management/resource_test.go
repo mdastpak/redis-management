@@ -11,25 +11,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// pkg/management/resource_test.go
 func TestResourceUsage(t *testing.T) {
 	scales := []int{1, 10, 100, 1000}
 
 	for _, scale := range scales {
 		t.Run(fmt.Sprintf("Scale_%dx", scale), func(t *testing.T) {
 			numOperations := 10 * scale
-			mr, cfg := setupTestRedis(t)
-			defer mr.Close()
+
+			rs, err := setupTestRedis()
+			require.NoError(t, err)
+			defer rs.Close()
 
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
 			startAlloc := m.Alloc
 			startSys := m.Sys
 
-			cfg.Bulk.BatchSize = 10 * scale
-			service, err := NewRedisService(cfg)
-			require.NoError(t, err)
-			defer service.Close()
+			rs.cfg.Bulk.BatchSize = 10 * scale
+
+			// service, err := NewRedisService(rs.cfg)
+			// require.NoError(t, err)
+			// defer service.Close()
 
 			// اجرای عملیات‌ها
 			var wg sync.WaitGroup
@@ -44,7 +46,7 @@ func TestResourceUsage(t *testing.T) {
 					key := fmt.Sprintf("resource_test:key:%d", i)
 					value := fmt.Sprintf("value:%d", i)
 
-					err := service.AddBulkOperation(ctx, "SET", key, value, time.Hour)
+					err := rs.AddBulkOperation(ctx, "SET", key, value, time.Hour)
 					require.NoError(t, err)
 				}(i)
 			}
