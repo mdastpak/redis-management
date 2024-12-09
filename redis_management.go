@@ -19,7 +19,7 @@ type Client struct {
 // NewClient creates a new Redis management client with default configuration
 func NewClient() (*Client, error) {
 	// Load configuration
-	cfg, err := config.Load("config/config.yaml")
+	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %v", err)
 	}
