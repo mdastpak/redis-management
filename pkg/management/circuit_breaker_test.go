@@ -7,26 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mdastpak/redis-management/config"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestCircuitBreaker(t *testing.T) {
-	mr, cfg := setupTestRedis(t)
-	defer mr.Close()
-
-	// Enable circuit breaker for test
-	cfg.Circuit = config.CircuitConfig{
-		Status:       true,
-		Threshold:    3,
-		ResetTimeout: 1, // 1 second for faster testing
-		MaxHalfOpen:  2,
-	}
-
-	service, err := NewRedisService(cfg)
-	require.NoError(t, err)
-	defer service.Close()
+	t.Parallel()
 
 	t.Run("Normal Operation", func(t *testing.T) {
 		cb := NewCircuitBreaker(3, time.Second, 1)
