@@ -1,4 +1,3 @@
-// pkg/management/operation_test.go
 package management
 
 import (
@@ -11,20 +10,17 @@ import (
 )
 
 func TestOperationManager(t *testing.T) {
-	mr, cfg := setupTestRedis(t)
-	defer mr.Close()
-
-	service, err := NewRedisService(cfg)
-	require.NoError(t, err)
-	defer service.Close()
-
 	t.Run("Operation Execution During Maintenance", func(t *testing.T) {
-		om := NewOperationManager(service)
+		rs, err := setupTestRedis()
+		require.NoError(t, err)
+		defer rs.Close()
+
+		om := NewOperationManager(rs)
 		ctx := context.Background()
 
 		// Enable maintenance mode
 		maintManager := om.GetMaintenanceManager()
-		err := maintManager.EnableMaintenance(ctx, time.Hour, "test maintenance", true)
+		err = maintManager.EnableMaintenance(ctx, time.Hour, "test maintenance", true)
 		require.NoError(t, err)
 
 		// Test read operation
@@ -51,7 +47,11 @@ func TestOperationManager(t *testing.T) {
 	})
 
 	t.Run("Operation Execution During Shutdown", func(t *testing.T) {
-		om := NewOperationManager(service)
+		rs, err := setupTestRedis()
+		require.NoError(t, err)
+		defer rs.Close()
+
+		om := NewOperationManager(rs)
 		ctx := context.Background()
 
 		// Start shutdown
@@ -64,14 +64,18 @@ func TestOperationManager(t *testing.T) {
 		// Try operations
 		time.Sleep(200 * time.Millisecond)
 
-		_, err := om.ExecuteReadOp(ctx, "GET", func() (string, error) {
+		_, err = om.ExecuteReadOp(ctx, "GET", func() (string, error) {
 			return "test", nil
 		})
 		assert.Error(t, err, "Operation should be blocked during shutdown")
 	})
 
 	t.Run("Batch Operations", func(t *testing.T) {
-		om := NewOperationManager(service)
+		rs, err := setupTestRedis()
+		require.NoError(t, err)
+		defer rs.Close()
+
+		om := NewOperationManager(rs)
 		ctx := context.Background()
 
 		// Test batch string operation
@@ -90,12 +94,16 @@ func TestOperationManager(t *testing.T) {
 	})
 
 	t.Run("Status Reporting", func(t *testing.T) {
-		om := NewOperationManager(service)
+		rs, err := setupTestRedis()
+		require.NoError(t, err)
+		defer rs.Close()
+
+		om := NewOperationManager(rs)
 		ctx := context.Background()
 
 		// Enable maintenance mode
 		maintManager := om.GetMaintenanceManager()
-		err := maintManager.EnableMaintenance(ctx, time.Hour, "test status", true)
+		err = maintManager.EnableMaintenance(ctx, time.Hour, "test status", true)
 		require.NoError(t, err)
 
 		// Check status
