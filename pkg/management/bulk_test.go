@@ -1,4 +1,3 @@
-// pkg/management/bulk_test.go
 package management
 
 import (
@@ -16,15 +15,15 @@ const (
 )
 
 func TestBulkOperations(t *testing.T) {
-	mr, cfg := setupTestRedis(t)
-	defer mr.Close()
-
-	service, err := NewRedisService(cfg)
-	require.NoError(t, err)
-	defer service.Close()
+	t.Parallel()
 
 	t.Run("Bulk Operations with Default TTL", func(t *testing.T) {
 		ctx := context.Background()
+
+		rs, err := setupTestRedis()
+		require.NoError(t, err)
+		defer rs.Close()
+
 		numOperations := 10
 		var wg sync.WaitGroup
 
@@ -35,7 +34,7 @@ func TestBulkOperations(t *testing.T) {
 				key := fmt.Sprintf("bulk_key_%d", i)
 				value := fmt.Sprintf("value_%d", i)
 
-				err := service.AddBulkOperation(ctx, "SET", key, value, cfg.Redis.TTL)
+				err := rs.AddBulkOperation(ctx, "SET", key, value, rs.cfg.Redis.TTL)
 				require.NoError(t, err)
 			}(i)
 		}
@@ -47,13 +46,17 @@ func TestBulkOperations(t *testing.T) {
 			key := fmt.Sprintf("bulk_key_%d", i)
 			expectedValue := fmt.Sprintf("value_%d", i)
 
-			assertKeyValue(t, service, key, expectedValue)
-			assertTTL(t, service, key, cfg.Redis.TTL)
+			assertKeyValue(t, rs, key, expectedValue)
+			assertTTL(t, rs, key, rs.cfg.Redis.TTL)
 		}
 	})
 
 	t.Run("Bulk Operations with Mixed TTLs", func(t *testing.T) {
 		ctx := context.Background()
+
+		rs, err := setupTestRedis()
+		require.NoError(t, err)
+		defer rs.Close()
 
 		// Test mixed TTL values
 		operations := []struct {
@@ -61,13 +64,13 @@ func TestBulkOperations(t *testing.T) {
 			value string
 			ttl   time.Duration
 		}{
-			{"mixed_ttl_1", "value1", 0},             // No TTL
-			{"mixed_ttl_2", "value2", cfg.Redis.TTL}, // Default TTL
-			{"mixed_ttl_3", "value3", time.Hour},     // Custom TTL
+			{"mixed_ttl_1", "value1", 0},                // No TTL
+			{"mixed_ttl_2", "value2", rs.cfg.Redis.TTL}, // Default TTL
+			{"mixed_ttl_3", "value3", time.Hour},        // Custom TTL
 		}
 
 		for _, op := range operations {
-			err := service.AddBulkOperation(ctx, "SET", op.key, op.value, op.ttl)
+			err := rs.AddBulkOperation(ctx, "SET", op.key, op.value, op.ttl)
 			require.NoError(t, err)
 		}
 
@@ -75,12 +78,12 @@ func TestBulkOperations(t *testing.T) {
 
 		// Verify each operation
 		for _, op := range operations {
-			assertKeyValue(t, service, op.key, op.value)
+			assertKeyValue(t, rs, op.key, op.value)
 			expectedTTL := op.ttl
 			if expectedTTL == 0 {
 				expectedTTL = time.Duration(-1)
 			}
-			assertTTL(t, service, op.key, expectedTTL)
+			assertTTL(t, rs, op.key, expectedTTL)
 		}
 	})
 }
