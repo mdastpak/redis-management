@@ -10,29 +10,49 @@ import (
 )
 
 func TestOperationManager(t *testing.T) {
+	t.Parallel()
 	t.Run("Operation Execution During Maintenance", func(t *testing.T) {
-		rs, err := setupTestRedis()
-		require.NoError(t, err)
-		defer rs.Close()
+		// Create longer context for larger scales
+		timeout := time.Duration(1) * time.Second
+		if timeout < 5*time.Second {
+			timeout = 5 * time.Second
+		}
 
-		om := NewOperationManager(rs)
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rs, err := setupTestRedis(ctx)
+		require.NoError(t, err)
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			err := rs.Close(closeCtx)
+			require.NoError(t, err)
+		}()
+
+		// Initialize operation manager
+		om, err := NewOperationManager(rs)
+		if err != nil {
+			t.Fatalf("failed to initialize operation manager: %v", err)
+		}
 
 		// Enable maintenance mode
 		maintManager := om.GetMaintenanceManager()
-		err = maintManager.EnableMaintenance(ctx, time.Hour, "test maintenance", true)
+		err = maintManager.EnableMaintenance(ctx, time.Hour, "Operation Execution During Maintenance", true)
 		require.NoError(t, err)
 
 		// Test read operation
 		_, err = om.ExecuteReadOp(ctx, "GET", func() (string, error) {
 			return "test", nil
 		})
+
 		assert.NoError(t, err, "Read operation should be allowed")
 
 		// Test write operation
 		err = om.ExecuteWithLock(ctx, "SET", func() error {
 			return nil
 		})
+
 		assert.Error(t, err, "Write operation should be blocked")
 
 		// Disable maintenance
@@ -47,12 +67,29 @@ func TestOperationManager(t *testing.T) {
 	})
 
 	t.Run("Operation Execution During Shutdown", func(t *testing.T) {
-		rs, err := setupTestRedis()
-		require.NoError(t, err)
-		defer rs.Close()
+		// Create longer context for larger scales
+		timeout := time.Duration(1) * time.Second
+		if timeout < 5*time.Second {
+			timeout = 5 * time.Second
+		}
 
-		om := NewOperationManager(rs)
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rs, err := setupTestRedis(ctx)
+		require.NoError(t, err)
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			err := rs.Close(closeCtx)
+			require.NoError(t, err)
+		}()
+
+		// Initialize operation manager
+		om, err := NewOperationManager(rs)
+		if err != nil {
+			t.Fatalf("failed to initialize operation manager: %v", err)
+		}
 
 		// Start shutdown
 		go func() {
@@ -71,12 +108,29 @@ func TestOperationManager(t *testing.T) {
 	})
 
 	t.Run("Batch Operations", func(t *testing.T) {
-		rs, err := setupTestRedis()
-		require.NoError(t, err)
-		defer rs.Close()
+		// Create longer context for larger scales
+		timeout := time.Duration(1) * time.Second
+		if timeout < 5*time.Second {
+			timeout = 5 * time.Second
+		}
 
-		om := NewOperationManager(rs)
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rs, err := setupTestRedis(ctx)
+		require.NoError(t, err)
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			err := rs.Close(closeCtx)
+			require.NoError(t, err)
+		}()
+
+		// Initialize operation manager
+		om, err := NewOperationManager(rs)
+		if err != nil {
+			t.Fatalf("failed to initialize operation manager: %v", err)
+		}
 
 		// Test batch string operation
 		result, err := om.ExecuteBatchOp(ctx, "MGET", func() (map[string]string, error) {
@@ -94,12 +148,29 @@ func TestOperationManager(t *testing.T) {
 	})
 
 	t.Run("Status Reporting", func(t *testing.T) {
-		rs, err := setupTestRedis()
-		require.NoError(t, err)
-		defer rs.Close()
+		// Create longer context for larger scales
+		timeout := time.Duration(1) * time.Second
+		if timeout < 5*time.Second {
+			timeout = 5 * time.Second
+		}
 
-		om := NewOperationManager(rs)
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rs, err := setupTestRedis(ctx)
+		require.NoError(t, err)
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			err := rs.Close(closeCtx)
+			require.NoError(t, err)
+		}()
+
+		// Initialize operation manager
+		om, err := NewOperationManager(rs)
+		if err != nil {
+			t.Fatalf("failed to initialize operation manager: %v", err)
+		}
 
 		// Enable maintenance mode
 		maintManager := om.GetMaintenanceManager()

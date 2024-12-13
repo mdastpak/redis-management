@@ -13,12 +13,25 @@ func TestMaintenanceManager(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Enable and Disable Maintenance", func(t *testing.T) {
-		rs, err := setupTestRedis()
+		// Create longer context for larger scales
+		timeout := time.Duration(1) * time.Second
+		if timeout < 5*time.Second {
+			timeout = 5 * time.Second
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rs, err := setupTestRedis(ctx)
 		require.NoError(t, err)
-		defer rs.Close()
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			err := rs.Close(closeCtx)
+			require.NoError(t, err)
+		}()
 
 		mm := NewMaintenanceManager(rs)
-		ctx := context.Background()
 
 		// Enable maintenance mode
 		err = mm.EnableMaintenance(ctx, time.Hour, "scheduled maintenance", true)
@@ -45,12 +58,25 @@ func TestMaintenanceManager(t *testing.T) {
 	})
 
 	t.Run("Auto Disable After Duration", func(t *testing.T) {
-		rs, err := setupTestRedis()
+		// Create longer context for larger scales
+		timeout := time.Duration(1) * time.Second
+		if timeout < 5*time.Second {
+			timeout = 5 * time.Second
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rs, err := setupTestRedis(ctx)
 		require.NoError(t, err)
-		defer rs.Close()
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			err := rs.Close(closeCtx)
+			require.NoError(t, err)
+		}()
 
 		mm := NewMaintenanceManager(rs)
-		ctx := context.Background()
 
 		// Enable maintenance for 1 second
 		err = mm.EnableMaintenance(ctx, time.Second, "short maintenance", true)
@@ -67,12 +93,25 @@ func TestMaintenanceManager(t *testing.T) {
 	})
 
 	t.Run("Operation Permissions During Maintenance", func(t *testing.T) {
-		rs, err := setupTestRedis()
+		// Create longer context for larger scales
+		timeout := time.Duration(1) * time.Second
+		if timeout < 5*time.Second {
+			timeout = 5 * time.Second
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rs, err := setupTestRedis(ctx)
 		require.NoError(t, err)
-		defer rs.Close()
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			err := rs.Close(closeCtx)
+			require.NoError(t, err)
+		}()
 
 		mm := NewMaintenanceManager(rs)
-		ctx := context.Background()
 
 		// Enable maintenance in read-only mode
 		err = mm.EnableMaintenance(ctx, time.Hour, "testing permissions", true)
@@ -97,11 +136,23 @@ func TestMaintenanceOperations(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Operations During Maintenance", func(t *testing.T) {
-		ctx := context.Background()
+		// Create longer context for larger scales
+		timeout := time.Duration(1) * time.Second
+		if timeout < 5*time.Second {
+			timeout = 5 * time.Second
+		}
 
-		rs, err := setupTestRedis()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rs, err := setupTestRedis(ctx)
 		require.NoError(t, err)
-		defer rs.Close()
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			err := rs.Close(closeCtx)
+			require.NoError(t, err)
+		}()
 
 		// Initialize test data
 		key := "test_key"

@@ -22,3 +22,11 @@ func assertKeyValue(t *testing.T, service *RedisService, key string, expectedVal
 	require.NoError(t, err)
 	assert.Equal(t, expectedValue, value)
 }
+
+// Helper function for choosing minimum value
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

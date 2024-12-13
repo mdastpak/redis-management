@@ -13,11 +13,22 @@ func TestBatchOperations(t *testing.T) {
 	t.Parallel()
 
 	t.Run("SetBatch with Default TTL", func(t *testing.T) {
-		ctx := context.Background()
+		timeout := time.Duration(1) * time.Second
+		if timeout < 5*time.Second {
+			timeout = 5 * time.Second
+		}
 
-		rs, err := setupTestRedis()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rs, err := setupTestRedis(ctx)
 		require.NoError(t, err)
-		defer rs.Close()
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			err := rs.Close(closeCtx)
+			require.NoError(t, err)
+		}()
 
 		items := map[string]interface{}{
 			"batch_key1": "value1",

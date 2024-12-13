@@ -135,7 +135,8 @@ func NewClientWithCustomConfig(customConfig map[string]interface{}) (*Client, er
 
 // Close closes the client and its connections
 func (c *Client) Close() error {
-	return c.service.Close()
+	ctx := context.Background()
+	return c.service.Close(ctx)
 }
 
 // GetConfig returns the current configuration

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,26 +17,46 @@ func TestResourceUsage(t *testing.T) {
 
 	for _, scale := range scales {
 		t.Run(fmt.Sprintf("Scale_%dx", scale), func(t *testing.T) {
-			numOperations := 10 * scale
+			// Create longer context for larger scales
+			timeout := time.Duration(scale) * time.Second
+			if timeout < 5*time.Second {
+				timeout = 5 * time.Second
+			}
 
-			rs, err := setupTestRedis()
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
+			rs, err := setupTestRedis(ctx)
 			require.NoError(t, err)
-			defer rs.Close()
+			defer func() {
+				closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer closeCancel()
+				err := rs.Close(closeCtx)
+				require.NoError(t, err)
+			}()
+
+			numOperations := 10 * scale
 
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
 			startAlloc := m.Alloc
 			startSys := m.Sys
 
-			rs.cfg.Bulk.BatchSize = 10 * scale
+			newCfg := *rs.cfg
 
-			// service, err := NewRedisService(rs.cfg)
-			// require.NoError(t, err)
-			// defer service.Close()
+			newCfg.Redis.HashKeys = false
+			newCfg.Redis.KeyPrefix = "test_resource_usage:"
 
-			// اجرای عملیات‌ها
+			newCfg.Bulk.Status = true
+			newCfg.Bulk.BatchSize = numOperations
+			newCfg.Bulk.FlushInterval = 1
+			newCfg.Bulk.MaxRetries = 1
+			newCfg.Bulk.FlushInterval = 1
+
+			err = rs.ReloadConfig(&newCfg)
+			assert.NoError(t, err)
+
 			var wg sync.WaitGroup
-			ctx := context.Background()
 
 			start := time.Now()
 
@@ -43,8 +64,8 @@ func TestResourceUsage(t *testing.T) {
 				wg.Add(1)
 				go func(i int) {
 					defer wg.Done()
-					key := fmt.Sprintf("resource_test:key:%d", i)
-					value := fmt.Sprintf("value:%d", i)
+					key := fmt.Sprintf("key_%d", i)
+					value := fmt.Sprintf("value_%d", i)
 
 					err := rs.AddBulkOperation(ctx, "SET", key, value, time.Hour)
 					require.NoError(t, err)
