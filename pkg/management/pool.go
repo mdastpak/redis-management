@@ -1,5 +1,3 @@
-// pkg/management/pool.go
-
 package management
 
 import (

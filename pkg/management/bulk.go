@@ -1,4 +1,3 @@
-// pkg/management/bulk.go
 package management
 
 import (
