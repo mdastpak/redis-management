@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mdastpak/redis-management/config"
+	"redis-management/config"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -27,8 +27,7 @@ func TestKeyManager_GetKey(t *testing.T) {
 					DB:        "0",
 				},
 			},
-			input: "mykey",
-			// ما باید مقدار hash شده واقعی را انتظار داشته باشیم
+			input:    "mykey",
 			expected: "test:5e50f405ace6cbdf17379f4b9f2b0c9f4144c5e380ea0b9298cb02ebd8ffe511",
 			hashKey:  true,
 		},
@@ -67,7 +66,7 @@ func TestKeyManager_GetKey(t *testing.T) {
 
 			result := km.GetKey(tt.input)
 			if tt.hashKey {
-				// برای کلیدهای hash شده، فقط چک می‌کنیم که prefix درست باشد و خروجی خالی نباشد
+				// For hashed keys, we only check that the prefix is correct and the output is not empty
 				assert.True(t, strings.HasPrefix(result, "test:"))
 				assert.NotEqual(t, "test:mykey", result)
 			} else {
@@ -77,7 +76,7 @@ func TestKeyManager_GetKey(t *testing.T) {
 	}
 }
 
-// اضافه کردن تست برای parseDBRange
+// TestParseDBRange tests the parsing of a DB range string
 func TestParseDBRange(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mdastpak/redis-management/config"
+	"redis-management/config"
 )
 
 type KeyManager struct {

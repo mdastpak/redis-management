@@ -9,8 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"redis-management/config"
+
 	"github.com/go-redis/redis/v8"
-	"github.com/mdastpak/redis-management/config"
 )
 
 // Reload state tracks which components need reinitialization

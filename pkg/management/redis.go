@@ -1,4 +1,3 @@
-// pkg/management/redis.go
 package management
 
 import (
@@ -8,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mdastpak/redis-management/config"
+	"redis-management/config"
 
 	"github.com/go-redis/redis/v8"
 )

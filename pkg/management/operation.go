@@ -51,7 +51,7 @@ func NewOperationManager(service *RedisService) (*OperationManager, error) {
 	// Initialize maintenance manager
 	maintenanceManager := NewMaintenanceManager(service)
 	if maintenanceManager == nil {
-		return nil, fmt.Errorf("Maintenance Manager is not initialized")
+		return nil, fmt.Errorf("maintenance manager is not initialized")
 	}
 
 	// Initialize operation manager with enhanced shutdown configuration
