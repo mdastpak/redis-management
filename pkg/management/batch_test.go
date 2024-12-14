@@ -10,32 +10,43 @@ import (
 )
 
 func TestBatchOperations(t *testing.T) {
-	mr, cfg := setupTestRedis(t)
-	defer mr.Close()
-
-	service, err := NewRedisService(cfg)
-	require.NoError(t, err)
-	defer service.Close()
+	t.Parallel()
 
 	t.Run("SetBatch with Default TTL", func(t *testing.T) {
-		ctx := context.Background()
+		timeout := time.Duration(1) * time.Second
+		if timeout < 5*time.Second {
+			timeout = 5 * time.Second
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rs, err := setupTestRedis(ctx)
+		require.NoError(t, err)
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			err := rs.Close(closeCtx)
+			require.NoError(t, err)
+		}()
+
 		items := map[string]interface{}{
 			"batch_key1": "value1",
 			"batch_key2": "value2",
 		}
 
-		err := service.SetBatchWithDefaultTTL(ctx, items)
+		err = rs.SetBatchWithDefaultTTL(ctx, items)
 		require.NoError(t, err)
 
 		for key, expectedValue := range items {
-			value, err := service.Get(ctx, key)
+			value, err := rs.Get(ctx, key)
 			require.NoError(t, err)
 			assert.Equal(t, expectedValue, value)
 
-			ttl, err := service.GetTTL(ctx, key)
+			ttl, err := rs.GetTTL(ctx, key)
 			require.NoError(t, err)
 			t.Logf("TTL for key %s: %v", key, ttl)
-			assert.Equal(t, time.Duration(cfg.Redis.TTL), ttl)
+			assert.Equal(t, time.Duration(rs.cfg.Redis.TTL), ttl)
 		}
 	})
 }

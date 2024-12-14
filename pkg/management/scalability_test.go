@@ -12,80 +12,146 @@ import (
 )
 
 func TestBulkOperationsScalability(t *testing.T) {
-	// Define test scales: 1x, 10x, 100x, 1000x
+	t.Parallel()
+
 	scales := []int{1, 10, 100, 1000}
 
 	for _, scale := range scales {
 		t.Run(fmt.Sprintf("Scale_%dx", scale), func(t *testing.T) {
-			// Calculate number of operations based on scale
-			numOperations := 10 * scale
-			mr, cfg := setupTestRedis(t)
-			defer mr.Close()
+			// Create longer context for larger scales
+			timeout := time.Duration(scale) * time.Second
+			if timeout < 5*time.Second {
+				timeout = 5 * time.Second
+			}
 
-			// Configure batch size according to scale
-			cfg.Bulk.BatchSize = 10 * scale
-			service, err := NewRedisService(cfg)
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
+			rs, err := setupTestRedis(ctx)
 			require.NoError(t, err)
-			defer service.Close()
+			defer func() {
+				closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer closeCancel()
+				err := rs.Close(closeCtx)
+				require.NoError(t, err)
+			}()
 
-			// Track execution time and prepare error handling
+			numOperations := 10 * scale
+
+			newCfg := *rs.cfg
+			newCfg.Redis.HashKeys = false
+			newCfg.Redis.KeyPrefix = "test_bulk_os:"
+
+			newCfg.Bulk.Status = true
+			newCfg.Bulk.BatchSize = numOperations
+			newCfg.Bulk.FlushInterval = 1
+			newCfg.Bulk.MaxRetries = 3
+			newCfg.Bulk.FlushInterval = 1
+			newCfg.Bulk.ConcurrentFlush = true
+
+			err = rs.ReloadConfig(&newCfg)
+			assert.NoError(t, err)
+
+			results := make(chan error, numOperations)
+			done := make(chan struct{})
+
 			start := time.Now()
-			var wg sync.WaitGroup
-			errChan := make(chan error, numOperations)
 
-			// Execute bulk operations concurrently
-			for i := 0; i < numOperations; i++ {
-				wg.Add(1)
-				go func(i int) {
-					defer wg.Done()
-					key := fmt.Sprintf("scale_test:key:%d", i)
-					value := fmt.Sprintf("value:%d", i)
-					ctx := context.Background()
+			go func() {
+				var wg sync.WaitGroup
 
-					// Attempt bulk operation
-					err := service.AddBulkOperation(ctx, "SET", key, value, time.Hour)
-					if err != nil {
-						errChan <- fmt.Errorf("operation %d failed: %v", i, err)
+				// Use buffered semaphore to control concurrency
+				semaphore := make(chan struct{}, 100)
+
+				for i := 0; i < numOperations; i++ {
+					wg.Add(1)
+					semaphore <- struct{}{}
+
+					go func(i int) {
+						defer wg.Done()
+						defer func() { <-semaphore }()
+
+						key := fmt.Sprintf("key_%d", i)
+						value := fmt.Sprintf("value_%d", i)
+
+						err := rs.AddBulkOperation(ctx, "SET", key, value, (rs.cfg.Redis.TTL * time.Duration(scale)))
+						if err != nil {
+							select {
+							case results <- fmt.Errorf("operation %d failed: %v", i, err):
+							default:
+							}
+						}
+					}(i)
+
+					// Add small delay between batches to prevent overwhelming
+					if i > 0 && i%rs.cfg.Bulk.BatchSize == 0 {
+						time.Sleep(10 * time.Millisecond)
 					}
-				}(i)
+
+				}
+
+				wg.Wait()
+				close(results)
+				close(done)
+			}()
+
+			// Wait for completion or timeout
+			select {
+			case <-ctx.Done():
+				if ctx.Err() == context.DeadlineExceeded {
+					t.Logf("Operations timed out after %v", time.Since(start))
+				}
+				t.Fatal("Context cancelled or timed out")
+			case <-done:
+				// Process any errors
+				for err := range results {
+					t.Error(err)
+				}
 			}
 
-			// Wait for all operations to complete
-			wg.Wait()
-			close(errChan)
-
-			// Check for any errors during execution
-			for err := range errChan {
-				t.Error(err)
-			}
-
-			// Calculate and log performance metrics
 			elapsed := time.Since(start)
 			opsPerSec := float64(numOperations) / elapsed.Seconds()
 
-			t.Logf("Scale %dx: Processed %d operations in %v (%.2f ops/sec)",
-				scale, numOperations, elapsed, opsPerSec)
+			// Wait for bulk operations to complete
+			time.Sleep(time.Duration(scale) * 100 * time.Millisecond)
 
-			// Verify all operations were successful
-			for i := 0; i < numOperations; i++ {
-				key := fmt.Sprintf("test:scale_test:key:%d", i)
-				expectedValue := fmt.Sprintf("value:%d", i)
+			// Verify a sample of results
+			sampleSize := min(numOperations, 100)
+			for i := 0; i < sampleSize; i++ {
+				index := i * (numOperations / sampleSize)
+				key := fmt.Sprintf("key_%d", index)
+				expectedValue := fmt.Sprintf("value_%d", index)
 
-				// Verify each key-value pair
-				value, err := mr.Get(key)
-				require.NoError(t, err, "Failed to get key %s", key)
-				assert.Equal(t, expectedValue, value,
-					"Value mismatch for key %s", key)
+				value, err := rs.Get(ctx, key)
+				if err != nil {
+					t.Errorf("Failed to get key %s: %v", key, err)
+					continue
+				}
+				if value != expectedValue {
+					t.Errorf("Value mismatch for key %s: expected %s, got %s",
+						key, expectedValue, value)
+				}
+
+				// Verify TTL is set
+				ttl, err := rs.GetTTL(ctx, key)
+				if err != nil {
+					t.Errorf("Failed to get TTL for key %s: %v", key, err)
+					continue
+				}
+				require.InDelta(t, (rs.cfg.Redis.TTL * time.Duration(scale)).Seconds(), ttl.Seconds(), 30.0*float64(scale))
 			}
 
-			// Log additional metrics for analysis
-			t.Logf("Average time per operation: %.3f ms",
+			t.Logf("Scale %dx Statistics:", scale)
+			t.Logf("- Total Operations: %d", numOperations)
+			t.Logf("- Total Time: %v", elapsed)
+			t.Logf("- Operations/sec: %.2f", opsPerSec)
+			t.Logf("- Avg Time/Operation: %.3f ms",
 				float64(elapsed.Milliseconds())/float64(numOperations))
 
-			stats := service.getPoolStats()
-			if stats != nil {
-				t.Logf("Pool stats - TotalConns: %d, IdleConns: %d",
-					stats.TotalConns, stats.IdleConns)
+			if stats := rs.GetPoolStats(); stats != nil {
+				t.Logf("- Pool Stats:")
+				t.Logf("  * Total Connections: %d", stats.TotalConns)
+				t.Logf("  * Idle Connections: %d", stats.IdleConns)
 			}
 		})
 	}

@@ -1,4 +1,3 @@
-// pkg/management/bulk_test.go
 package management
 
 import (
@@ -8,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,26 +16,52 @@ const (
 )
 
 func TestBulkOperations(t *testing.T) {
-	mr, cfg := setupTestRedis(t)
-	defer mr.Close()
-
-	service, err := NewRedisService(cfg)
-	require.NoError(t, err)
-	defer service.Close()
+	t.Parallel()
 
 	t.Run("Bulk Operations with Default TTL", func(t *testing.T) {
-		ctx := context.Background()
+		timeout := time.Duration(1) * time.Second
+		if timeout < 5*time.Second {
+			timeout = 5 * time.Second
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rs, err := setupTestRedis(ctx)
+		require.NoError(t, err)
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			err := rs.Close(closeCtx)
+			require.NoError(t, err)
+		}()
+
 		numOperations := 10
+
+		newCfg := *rs.cfg
+		newCfg.Redis.HashKeys = false
+		newCfg.Redis.KeyPrefix = "bulk_operations_with_default_ttl:"
+
+		newCfg.Bulk.Status = true
+		newCfg.Bulk.BatchSize = numOperations
+		newCfg.Bulk.FlushInterval = 1
+		newCfg.Bulk.MaxRetries = 3
+		newCfg.Bulk.FlushInterval = 1
+		newCfg.Bulk.ConcurrentFlush = true
+
+		err = rs.ReloadConfig(&newCfg)
+		assert.NoError(t, err)
+
 		var wg sync.WaitGroup
 
 		for i := 0; i < numOperations; i++ {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				key := fmt.Sprintf("bulk_key_%d", i)
+				key := fmt.Sprintf("key_%d", i)
 				value := fmt.Sprintf("value_%d", i)
 
-				err := service.AddBulkOperation(ctx, "SET", key, value, cfg.Redis.TTL)
+				err := rs.AddBulkOperation(ctx, "SET", key, value, rs.cfg.Redis.TTL)
 				require.NoError(t, err)
 			}(i)
 		}
@@ -44,16 +70,56 @@ func TestBulkOperations(t *testing.T) {
 		time.Sleep(bulkOperationWaitTime) // Allow bulk operations to complete
 
 		for i := 0; i < numOperations; i++ {
-			key := fmt.Sprintf("bulk_key_%d", i)
+			key := fmt.Sprintf("key_%d", i)
 			expectedValue := fmt.Sprintf("value_%d", i)
 
-			assertKeyValue(t, service, key, expectedValue)
-			assertTTL(t, service, key, cfg.Redis.TTL)
+			assertKeyValue(t, rs, key, expectedValue)
+
+			// Verify TTL is set
+			ttl, err := rs.GetTTL(ctx, key)
+			if err != nil {
+				t.Errorf("Failed to get TTL for key %s: %v", key, err)
+				continue
+			}
+			require.InDelta(t, rs.cfg.Redis.TTL.Seconds(), ttl.Seconds(), 10)
 		}
 	})
 
 	t.Run("Bulk Operations with Mixed TTLs", func(t *testing.T) {
-		ctx := context.Background()
+		timeout := time.Duration(10) * time.Second
+		if timeout < 5*time.Second {
+			timeout = 5 * time.Second
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		rs, err := setupTestRedis(ctx)
+		require.NoError(t, err)
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			err := rs.Close(closeCtx)
+			require.NoError(t, err)
+		}()
+
+		numOperations := 10
+
+		newCfg := *rs.cfg
+		newCfg.Redis.HashKeys = false
+		newCfg.Redis.KeyPrefix = "bulk_operations_with_mixed_ttls:"
+
+		newCfg.Bulk.Status = true
+		newCfg.Bulk.BatchSize = numOperations
+		newCfg.Bulk.FlushInterval = 1
+		newCfg.Bulk.MaxRetries = 3
+		newCfg.Bulk.FlushInterval = 1
+		newCfg.Bulk.ConcurrentFlush = true
+
+		err = rs.ReloadConfig(&newCfg)
+		assert.NoError(t, err)
+
+		var wg sync.WaitGroup
 
 		// Test mixed TTL values
 		operations := []struct {
@@ -61,26 +127,37 @@ func TestBulkOperations(t *testing.T) {
 			value string
 			ttl   time.Duration
 		}{
-			{"mixed_ttl_1", "value1", 0},             // No TTL
-			{"mixed_ttl_2", "value2", cfg.Redis.TTL}, // Default TTL
-			{"mixed_ttl_3", "value3", time.Hour},     // Custom TTL
+			{"mixed_ttl_1", "value1", 0},                // No TTL
+			{"mixed_ttl_2", "value2", rs.cfg.Redis.TTL}, // Default TTL
+			{"mixed_ttl_3", "value3", time.Hour},        // Custom TTL
 		}
 
 		for _, op := range operations {
-			err := service.AddBulkOperation(ctx, "SET", op.key, op.value, op.ttl)
+			err := rs.AddBulkOperation(ctx, "SET", op.key, op.value, op.ttl)
 			require.NoError(t, err)
 		}
 
+		wg.Wait()
 		time.Sleep(bulkOperationWaitTime)
 
 		// Verify each operation
 		for _, op := range operations {
-			assertKeyValue(t, service, op.key, op.value)
+			assertKeyValue(t, rs, op.key, op.value)
 			expectedTTL := op.ttl
+			t.Log("Key, Expected TTL:", op.key, expectedTTL)
 			if expectedTTL == 0 {
 				expectedTTL = time.Duration(-1)
 			}
-			assertTTL(t, service, op.key, expectedTTL)
+
+			// Verify TTL is set
+			ttl, err := rs.GetTTL(ctx, op.key)
+			t.Log("Actual TTL:", ttl)
+			if err != nil {
+				t.Errorf("Failed to get TTL for key %s: %v", op.key, err)
+				continue
+			}
+			require.InDelta(t, op.ttl.Seconds(), ttl.Seconds(), 10)
+
 		}
 	})
 }

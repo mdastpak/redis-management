@@ -8,32 +8,55 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// pkg/management/resource_test.go
 func TestResourceUsage(t *testing.T) {
 	scales := []int{1, 10, 100, 1000}
 
 	for _, scale := range scales {
 		t.Run(fmt.Sprintf("Scale_%dx", scale), func(t *testing.T) {
+			// Create longer context for larger scales
+			timeout := time.Duration(scale) * time.Second
+			if timeout < 5*time.Second {
+				timeout = 5 * time.Second
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
+			rs, err := setupTestRedis(ctx)
+			require.NoError(t, err)
+			defer func() {
+				closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer closeCancel()
+				err := rs.Close(closeCtx)
+				require.NoError(t, err)
+			}()
+
 			numOperations := 10 * scale
-			mr, cfg := setupTestRedis(t)
-			defer mr.Close()
 
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
 			startAlloc := m.Alloc
 			startSys := m.Sys
 
-			cfg.Bulk.BatchSize = 10 * scale
-			service, err := NewRedisService(cfg)
-			require.NoError(t, err)
-			defer service.Close()
+			newCfg := *rs.cfg
 
-			// اجرای عملیات‌ها
+			newCfg.Redis.HashKeys = false
+			newCfg.Redis.KeyPrefix = "test_resource_usage:"
+
+			newCfg.Bulk.Status = true
+			newCfg.Bulk.BatchSize = numOperations
+			newCfg.Bulk.FlushInterval = 1
+			newCfg.Bulk.MaxRetries = 1
+			newCfg.Bulk.FlushInterval = 1
+
+			err = rs.ReloadConfig(&newCfg)
+			assert.NoError(t, err)
+
 			var wg sync.WaitGroup
-			ctx := context.Background()
 
 			start := time.Now()
 
@@ -41,10 +64,10 @@ func TestResourceUsage(t *testing.T) {
 				wg.Add(1)
 				go func(i int) {
 					defer wg.Done()
-					key := fmt.Sprintf("resource_test:key:%d", i)
-					value := fmt.Sprintf("value:%d", i)
+					key := fmt.Sprintf("key_%d", i)
+					value := fmt.Sprintf("value_%d", i)
 
-					err := service.AddBulkOperation(ctx, "SET", key, value, time.Hour)
+					err := rs.AddBulkOperation(ctx, "SET", key, value, time.Hour)
 					require.NoError(t, err)
 				}(i)
 			}

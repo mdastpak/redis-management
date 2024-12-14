@@ -17,11 +17,13 @@ type RedisService struct {
 	cfg              *config.Config
 	client           *redis.Client
 	pool             *redis.Client
+	poolManager      *PoolManager
 	keyMgr           *KeyManager
 	bulkQueue        chan BulkOperation
 	mu               sync.RWMutex
 	cb               *CircuitBreaker
 	operationManager *OperationManager
+	logger           Logger
 }
 
 func NewRedisService(cfg *config.Config) (*RedisService, error) {
@@ -37,18 +39,21 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 	}
 
 	// Initialize operation manager
-	service.operationManager = NewOperationManager(service)
+	service.operationManager, err = NewOperationManager(service)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create operation manager: %v", err)
+	}
 
 	// Initialize connection
 	if err := service.connect(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to connect to Redis: %v", err)
 	}
 
 	// Initialize pool if enabled
 	if cfg.Pool.Status {
 		log.Printf("Initializing connection pool with size: %d", cfg.Pool.Size)
-		if err := service.initPool(); err != nil {
-			return nil, err
+		if err := service.NewPoolManager(context.Background()); err != nil {
+			return nil, fmt.Errorf("failed to create pool manager: %v", err)
 		}
 	}
 
@@ -86,21 +91,23 @@ func (rs *RedisService) connect() error {
 	return rs.client.Ping(context.Background()).Err()
 }
 
-func (rs *RedisService) Close() error {
+func (rs *RedisService) Close(ctx context.Context) error {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
 	var errs []error
 
-	// Try graceful shutdown first
+	// Attempt graceful shutdown first
 	if rs.operationManager != nil {
-		ctx := context.Background()
-		if err := rs.operationManager.GetShutdownManager().Shutdown(ctx); err != nil {
+		shutdownCtx, cancel := context.WithTimeout(ctx, rs.cfg.Redis.ShutdownTimeout)
+		defer cancel()
+
+		if err := rs.operationManager.GetShutdownManager().Shutdown(shutdownCtx); err != nil {
 			errs = append(errs, fmt.Errorf("graceful shutdown failed: %v", err))
 		}
 	}
 
-	// Close client if it exists
+	// Close client connections
 	if rs.client != nil {
 		if err := rs.client.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("error closing client: %v", err))
@@ -108,12 +115,21 @@ func (rs *RedisService) Close() error {
 		rs.client = nil
 	}
 
-	// Close pool if it exists
+	// Close connection pool
 	if rs.pool != nil {
 		if err := rs.pool.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("error closing pool: %v", err))
 		}
 		rs.pool = nil
+	}
+
+	// Close logger if it's closeable
+	if rs.logger != nil {
+		if closer, ok := rs.logger.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("error closing logger: %v", err))
+			}
+		}
 	}
 
 	if len(errs) > 0 {
@@ -135,7 +151,7 @@ func (rs *RedisService) startBulkProcessor() {
 
 // Add bulk operation methods
 func (rs *RedisService) AddBulkOperation(ctx context.Context, command string, key string, value interface{}, expires time.Duration) error {
-	result := make(chan error, 1)
+	resultCh := make(chan error, 1)
 
 	select {
 	case rs.bulkQueue <- BulkOperation{
@@ -143,12 +159,19 @@ func (rs *RedisService) AddBulkOperation(ctx context.Context, command string, ke
 		Key:       key,
 		Value:     value,
 		ExpiresAt: expires,
-		Result:    result,
+		Result:    resultCh,
 	}:
-		return <-result
+		// Wait for the operation to complete
+		select {
+		case err := <-resultCh:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+
 }
 
 // getClient returns the appropriate Redis client (pool or regular)
