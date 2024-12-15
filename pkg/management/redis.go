@@ -3,11 +3,11 @@ package management
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"redis-management/config"
+	"redis-management/pkg/logging"
 
 	"github.com/go-redis/redis/v8"
 )
@@ -22,10 +22,17 @@ type RedisService struct {
 	mu               sync.RWMutex
 	cb               *CircuitBreaker
 	operationManager *OperationManager
-	logger           Logger
+	wrapper          *OperationWrapper
+	logger           logging.Logger
 }
 
 func NewRedisService(cfg *config.Config) (*RedisService, error) {
+	// Initialize logger
+	logger := logging.NewLogger(
+		logging.WithLevel(logging.LevelFromConfig(cfg.Logging.Level)),
+		logging.WithFormatter(logging.NewFormatter(logging.FormatFromString(cfg.Logging.Format))),
+	)
+
 	keyMgr, err := NewKeyManager(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create key manager: %v", err)
@@ -35,6 +42,7 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 		cfg:       cfg,
 		keyMgr:    keyMgr,
 		bulkQueue: make(chan BulkOperation, cfg.Bulk.BatchSize),
+		logger:    logger,
 	}
 
 	// Initialize operation manager
@@ -50,7 +58,13 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 
 	// Initialize pool if enabled
 	if cfg.Pool.Status {
-		log.Printf("Initializing connection pool with size: %d", cfg.Pool.Size)
+		// log.Printf("Initializing connection pool with size: %d", cfg.Pool.Size)
+		service.logger.WithFields(map[string]interface{}{
+			"pool_size":    cfg.Pool.Size,
+			"min_idle":     cfg.Pool.MinIdle,
+			"wait_timeout": cfg.Pool.WaitTimeout,
+		}).Info("Initializing connection pool")
+
 		if err := service.NewPoolManager(context.Background()); err != nil {
 			return nil, fmt.Errorf("failed to create pool manager: %v", err)
 		}
@@ -58,8 +72,12 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 
 	// Initialize circuit breaker if enabled
 	if cfg.Circuit.Status {
-		log.Printf("Initializing circuit breaker with threshold: %d, reset timeout: %d seconds",
-			cfg.Circuit.Threshold, cfg.Circuit.ResetTimeout)
+		// log.Printf("Initializing circuit breaker with threshold: %d, reset timeout: %d seconds", cfg.Circuit.Threshold, cfg.Circuit.ResetTimeout)
+		service.logger.WithFields(map[string]interface{}{
+			"threshold":     cfg.Circuit.Threshold,
+			"reset_timeout": cfg.Circuit.ResetTimeout,
+		}).Info("Initializing circuit breaker")
+
 		service.cb = NewCircuitBreaker(
 			cfg.Circuit.Threshold,
 			time.Duration(cfg.Circuit.ResetTimeout)*time.Second,
@@ -69,11 +87,16 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 
 	// Initialize bulk processor if enabled
 	if cfg.Bulk.Status {
-		log.Printf("Starting bulk processor with batch size: %d, flush interval: %d ms", cfg.Bulk.BatchSize, cfg.Bulk.FlushInterval)
+		// log.Printf("Starting bulk processor with batch size: %d, flush interval: %d ms", cfg.Bulk.BatchSize, cfg.Bulk.FlushInterval)
+		service.logger.WithFields(map[string]interface{}{
+			"batch_size":     cfg.Bulk.BatchSize,
+			"flush_interval": cfg.Bulk.FlushInterval,
+		}).Info("Starting bulk processor")
 
 		service.startBulkProcessor()
 	}
 
+	service.logger.Info("Redis service initialized successfully")
 	return service, nil
 }
 
@@ -86,13 +109,26 @@ func (rs *RedisService) connect() error {
 		WriteTimeout: time.Duration(rs.cfg.Redis.Timeout) * time.Second,
 	}
 
+	rs.logger.WithFields(map[string]interface{}{
+		"host":    rs.cfg.Redis.Host,
+		"port":    rs.cfg.Redis.Port,
+		"timeout": rs.cfg.Redis.Timeout,
+	}).Debug("Connecting to Redis")
+
 	rs.client = redis.NewClient(options)
-	return rs.client.Ping(context.Background()).Err()
+	if err := rs.client.Ping(context.Background()).Err(); err != nil {
+		return fmt.Errorf("failed to ping Redis: %v", err)
+	}
+
+	rs.logger.Info("Successfully connected to Redis")
+	return nil
 }
 
 func (rs *RedisService) Close(ctx context.Context) error {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
+
+	rs.logger.Info("Starting service shutdown")
 
 	var errs []error
 
@@ -108,6 +144,7 @@ func (rs *RedisService) Close(ctx context.Context) error {
 
 	// Close client connections
 	if rs.client != nil {
+		rs.logger.Debug("Closing main Redis client")
 		if err := rs.client.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("error closing client: %v", err))
 		}
@@ -116,24 +153,21 @@ func (rs *RedisService) Close(ctx context.Context) error {
 
 	// Close connection pool
 	if rs.pool != nil {
+		rs.logger.Debug("Closing Redis connection pool")
 		if err := rs.pool.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("error closing pool: %v", err))
 		}
 		rs.pool = nil
 	}
 
-	// Close logger if it's closeable
-	if rs.logger != nil {
-		if closer, ok := rs.logger.(interface{ Close() error }); ok {
-			if err := closer.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("error closing logger: %v", err))
-			}
-		}
-	}
-
 	if len(errs) > 0 {
+		for _, err := range errs {
+			rs.logger.WithError(err).Error("Shutdown error occurred")
+		}
 		return fmt.Errorf("errors during shutdown: %v", errs)
 	}
+
+	rs.logger.Info("Service shutdown completed successfully")
 	return nil
 }
 
@@ -186,20 +220,16 @@ func (rs *RedisService) getClient() *redis.Client {
 
 // Ping checks if Redis is responding
 func (rs *RedisService) Ping(ctx context.Context) error {
-	client := rs.getClient()
-	if client == nil {
-		return fmt.Errorf("redis client is not initialized")
-	}
-	return client.Ping(ctx).Err()
+	return rs.wrapper.WrapOperation(ctx, "PING", nil, func() error {
+		client := rs.getClient()
+		if client == nil {
+			return fmt.Errorf("redis client is not initialized")
+		}
+		return client.Ping(ctx).Err()
+	})
 }
 
-// GetPoolStats returns current pool statistics with additional safety checks
-func (rs *RedisService) GetPoolStats() *redis.PoolStats {
-	rs.mu.RLock()
-	defer rs.mu.RUnlock()
-
-	if rs.pool == nil {
-		return nil
-	}
-	return rs.pool.PoolStats()
+// GetLogger returns the logger instance
+func (rs *RedisService) GetLogger() logging.Logger {
+	return rs.logger
 }
