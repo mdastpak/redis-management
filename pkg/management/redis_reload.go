@@ -42,7 +42,7 @@ func (rs *RedisService) ReloadConfig(newCfg *config.Config) error {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
-	// Store old configuration
+	// Store old configuration for possible rollback
 	oldCfg := *rs.cfg // Create a copy of the old configuration
 
 	// Determine what needs to be reloaded
@@ -66,13 +66,13 @@ func (rs *RedisService) ReloadConfig(newCfg *config.Config) error {
 	}()
 
 	// Update base configuration
-	rs.cfg = newCfg
+	*rs.cfg = *newCfg
 
 	// Now reload methods can access both old and new configurations
 	if err := rs.reloadComponents(ctx, state, &rollbackActions, &oldCfg); err != nil {
 		log.Printf("Error during reload, rolling back: %v", err)
 		executeRollback(rollbackActions)
-		rs.cfg = &oldCfg
+		*rs.cfg = oldCfg
 		return fmt.Errorf("reload failed: %v", err)
 	}
 
