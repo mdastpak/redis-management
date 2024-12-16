@@ -24,6 +24,7 @@ type RedisService struct {
 	operationManager *OperationManager
 	wrapper          *OperationWrapper
 	logger           logging.Logger
+	bulkProcessor    *BulkProcessor
 }
 
 func NewRedisService(cfg *config.Config) (*RedisService, error) {
@@ -96,7 +97,8 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 			"flush_interval": cfg.Bulk.FlushInterval,
 		}).Info("Starting bulk processor")
 
-		service.startBulkProcessor()
+		service.bulkProcessor = NewBulkProcessor(service, &cfg.Bulk, service.logger)
+		service.bulkProcessor.Start(context.Background())
 	}
 
 	service.logger.Info("Redis service initialized successfully")
@@ -163,6 +165,10 @@ func (rs *RedisService) Close(ctx context.Context) error {
 		rs.pool = nil
 	}
 
+	if rs.bulkProcessor != nil {
+		rs.bulkProcessor.Stop()
+	}
+
 	if len(errs) > 0 {
 		for _, err := range errs {
 			rs.logger.WithError(err).Error("Shutdown error occurred")
@@ -174,42 +180,6 @@ func (rs *RedisService) Close(ctx context.Context) error {
 	return nil
 }
 
-func (rs *RedisService) startBulkProcessor() {
-	if rs.cfg.Bulk.Status {
-
-		processor := NewBulkProcessor(rs)
-		processor.Start(context.Background())
-
-		// // Use operation manager's shutdown manager to start bulk processor
-		// rs.operationManager.GetShutdownManager().StartBulkProcessor(context.Background())
-	}
-}
-
-// Add bulk operation methods
-func (rs *RedisService) AddBulkOperation(ctx context.Context, command string, key string, value interface{}, expires time.Duration) error {
-	resultCh := make(chan error, 1)
-
-	select {
-	case rs.bulkQueue <- BulkOperation{
-		Command:   command,
-		Key:       key,
-		Value:     value,
-		ExpiresAt: expires,
-		Result:    resultCh,
-	}:
-		// Wait for the operation to complete
-		select {
-		case err := <-resultCh:
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-}
-
 // getClient returns the appropriate Redis client (pool or regular)
 func (rs *RedisService) getClient() *redis.Client {
 	rs.mu.RLock()
@@ -219,6 +189,13 @@ func (rs *RedisService) getClient() *redis.Client {
 		return rs.pool
 	}
 	return rs.client
+}
+
+func (rs *RedisService) AddBulkOperation(ctx context.Context, command string, key string, value interface{}, expires time.Duration) error {
+	if rs.bulkProcessor == nil {
+		return fmt.Errorf("bulk processor is not initialized")
+	}
+	return rs.bulkProcessor.AddOperation(ctx, command, key, value, expires)
 }
 
 // Ping checks if Redis is responding
@@ -241,9 +218,4 @@ func (rs *RedisService) GetPoolStats() *redis.PoolStats {
 		return nil
 	}
 	return rs.pool.PoolStats()
-}
-
-// GetLogger returns the logger instance
-func (rs *RedisService) GetLogger() logging.Logger {
-	return rs.logger
 }

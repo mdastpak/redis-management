@@ -230,31 +230,28 @@ func (rs *RedisService) reloadBulkProcessor(rollbackActions *[]func(), oldConfig
 	}
 
 	// Store current state for possible rollback
-	oldBulkQueue := rs.bulkQueue
+	oldProcessor := rs.bulkProcessor
 
 	// Clean up old bulk processor if it was enabled
 	if oldConfig.Status {
-		if oldBulkQueue != nil {
-			close(oldBulkQueue)
-			rs.bulkQueue = nil
+		if oldProcessor != nil {
+			oldProcessor.Stop()
+			rs.bulkProcessor = nil
 		}
 	}
 
 	// Initialize new bulk processor if enabled in new configuration
 	if rs.cfg.Bulk.Status {
-		newBulkQueue := make(chan BulkOperation, rs.cfg.Bulk.BatchSize)
-		rs.bulkQueue = newBulkQueue
-
-		// Start new bulk processor
-		processor := NewBulkProcessor(rs)
-		go processor.Start(context.Background())
+		newProcessor := NewBulkProcessor(rs, &rs.cfg.Bulk, rs.logger)
+		rs.bulkProcessor = newProcessor
+		rs.bulkProcessor.Start(context.Background())
 
 		// Add rollback action
 		*rollbackActions = append(*rollbackActions, func() {
-			if rs.bulkQueue != nil {
-				close(rs.bulkQueue)
+			if rs.bulkProcessor != nil {
+				rs.bulkProcessor.Stop()
 			}
-			rs.bulkQueue = oldBulkQueue
+			rs.bulkProcessor = oldProcessor
 		})
 	}
 

@@ -632,12 +632,6 @@ func TestPoolConcurrency(t *testing.T) {
 			// Initialize Redis service
 			rs, err := setupTestRedis(ctx)
 			require.NoError(t, err)
-			defer func() {
-				closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer closeCancel()
-				err := rs.Close(closeCtx)
-				require.NoError(t, err)
-			}()
 
 			// Configure connection pool
 			newCfg := *rs.cfg
@@ -646,6 +640,16 @@ func TestPoolConcurrency(t *testing.T) {
 			newCfg.Pool.MinIdle = tt.params.maxConcurrent / 2
 			err = rs.ReloadConfig(&newCfg)
 			require.NoError(t, err)
+
+			// Ensure cleanup happens after all operations
+			defer func() {
+				closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer closeCancel()
+
+				// Then close the service
+				err := rs.Close(closeCtx)
+				require.NoError(t, err)
+			}()
 
 			// Create channels for results and errors
 			results := make(chan struct{}, tt.params.workers*tt.params.opsPerWorker)

@@ -138,6 +138,17 @@ func (rs *RedisService) NewPoolManager(ctx context.Context) error {
 	return nil
 }
 
+// cleanup helper function
+func (pm *PoolManager) cleanup() {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	if pm.service != nil && pm.service.pool != nil {
+		pm.service.pool.Close()
+	}
+	pm.status.Store(PoolStatusStopped)
+}
+
 func (pm *PoolManager) Stop() {
 	if !pm.status.CompareAndSwap(PoolStatusReady, PoolStatusStopping) {
 		return // Already stopping or stopped
@@ -145,6 +156,11 @@ func (pm *PoolManager) Stop() {
 
 	close(pm.stopChan)
 	pm.wg.Wait()
+
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	// Only store the status as stopped, don't close the pool here
 	pm.status.Store(PoolStatusStopped)
 }
 
@@ -307,7 +323,10 @@ func (pm *PoolManager) collectAndStoreMetrics(ctx context.Context) error {
 
 	go func() {
 		defer close(done)
-		stats = pm.service.pool.PoolStats()
+		// Safely get pool stats
+		if pm.service != nil && pm.service.pool != nil {
+			stats = pm.service.pool.PoolStats()
+		}
 	}()
 
 	select {
@@ -319,10 +338,14 @@ func (pm *PoolManager) collectAndStoreMetrics(ctx context.Context) error {
 		}
 	}
 
-	// Get pool options safely
+	// Safely get pool timeout
 	var poolTimeout time.Duration
-	if options := pm.service.pool.Options(); options != nil {
-		poolTimeout = time.Duration(options.PoolTimeout)
+	if pm.service != nil && pm.service.pool != nil {
+		if options := pm.service.pool.Options(); options != nil {
+			poolTimeout = options.PoolTimeout
+		} else {
+			poolTimeout = pm.monitoringCfg.HealthCheckTimeout
+		}
 	} else {
 		poolTimeout = pm.monitoringCfg.HealthCheckTimeout
 	}
