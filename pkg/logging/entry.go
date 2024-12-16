@@ -195,6 +195,7 @@ func (e *Entry) clone() *Entry {
 
 	return &Entry{
 		Level:      e.Level,
+		Message:    e.Message,
 		Fields:     fields,
 		Timestamp:  e.Timestamp,
 		logger:     e.logger,

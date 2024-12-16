@@ -1,4 +1,3 @@
-// pkg/management/redis.go
 package management
 
 import (
@@ -7,15 +6,19 @@ import (
 	"time"
 )
 
-// Modify Set method to use circuit breaker if enabled
+// Set stores a key-value pair in Redis with expiration time
 func (rs *RedisService) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
 	return rs.operationManager.ExecuteWithLock(ctx, "SET", func() error {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
 			return rs.cb.Execute(func() error {
-				return rs.set(ctx, key, value, expiration)
+				return rs.wrapper.WrapSet(ctx, key, value, func() error {
+					return rs.set(ctx, key, value, expiration)
+				})
 			})
 		}
-		return rs.set(ctx, key, value, expiration)
+		return rs.wrapper.WrapSet(ctx, key, value, func() error {
+			return rs.set(ctx, key, value, expiration)
+		})
 	})
 }
 
@@ -29,10 +32,14 @@ func (rs *RedisService) SetBatch(ctx context.Context, items map[string]interface
 	return rs.operationManager.ExecuteWithLock(ctx, "MSET", func() error {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
 			return rs.cb.Execute(func() error {
-				return rs.setBatch(ctx, items, expiration)
+				return rs.wrapper.WrapBatchSet(ctx, items, func() error {
+					return rs.setBatch(ctx, items, expiration)
+				})
 			})
 		}
-		return rs.setBatch(ctx, items, expiration)
+		return rs.wrapper.WrapBatchSet(ctx, items, func() error {
+			return rs.setBatch(ctx, items, expiration)
+		})
 	})
 }
 
@@ -49,18 +56,24 @@ func (rs *RedisService) set(ctx context.Context, key string, value interface{}, 
 
 	client := rs.getClient()
 	if client == nil {
-		return fmt.Errorf("redis client is not initialized")
+		err := fmt.Errorf("redis client is not initialized")
+		rs.logger.WithField("key", key).Error(err.Error())
+		return err
 	}
 
 	finalKey := rs.keyMgr.GetKey(key)
 	db, err := rs.keyMgr.GetShardIndex(key)
 	if err != nil {
-		return fmt.Errorf("failed to get shard index: %v", err)
+		err := fmt.Errorf("failed to get shard index: %v", err)
+		rs.logger.WithField("key", key).Error(err.Error())
+		return err
 	}
 
 	// Select appropriate database
 	if err := client.Do(ctx, "SELECT", db).Err(); err != nil {
-		return fmt.Errorf("failed to select database: %v", err)
+		err := fmt.Errorf("failed to select database: %v", err)
+		rs.logger.WithField("key", key).Error(err.Error())
+		return err
 	}
 
 	// Perform SET operation with retry logic
@@ -77,7 +90,9 @@ func (rs *RedisService) set(ctx context.Context, key string, value interface{}, 
 				time.Sleep(backoff)
 				continue
 			}
-			return fmt.Errorf("failed to set key after %d attempts: %v", rs.cfg.Redis.RetryAttempts, setErr)
+			err := fmt.Errorf("failed to set key after %d attempts: %v", rs.cfg.Redis.RetryAttempts, setErr)
+			rs.logger.WithField("key", key).Error(err.Error())
+			return err
 		}
 		break
 	}
@@ -93,7 +108,9 @@ func (rs *RedisService) setBatch(ctx context.Context, items map[string]interface
 
 	client := rs.getClient()
 	if client == nil {
-		return fmt.Errorf("redis client is not initialized")
+		err := fmt.Errorf("redis client is not initialized")
+		rs.logger.WithField("items", items).Error(err.Error())
+		return err
 	}
 
 	// Group items by database for efficiency
@@ -102,7 +119,9 @@ func (rs *RedisService) setBatch(ctx context.Context, items map[string]interface
 		finalKey := rs.keyMgr.GetKey(key)
 		db, err := rs.keyMgr.GetShardIndex(key)
 		if err != nil {
-			return fmt.Errorf("failed to get shard index for key %s: %v", key, err)
+			err := fmt.Errorf("failed to get shard index for key %s: %v", key, err)
+			rs.logger.WithField("key", key).Error(err.Error())
+			return err
 		}
 		if itemsByDB[db] == nil {
 			itemsByDB[db] = make(map[string]interface{})
@@ -117,7 +136,9 @@ func (rs *RedisService) setBatch(ctx context.Context, items map[string]interface
 	for db, dbItems := range itemsByDB {
 		// Select database
 		if err := pipe.Do(ctx, "SELECT", db).Err(); err != nil {
-			return fmt.Errorf("failed to select database %d: %v", db, err)
+			err := fmt.Errorf("failed to select database %d: %v", db, err)
+			rs.logger.WithField("db", db).Error(err.Error())
+			return err
 		}
 
 		// Add all items to pipeline
@@ -141,8 +162,10 @@ func (rs *RedisService) setBatch(ctx context.Context, items map[string]interface
 				}
 				time.Sleep(backoff)
 			} else {
-				return fmt.Errorf("failed to set keys in database %d after %d attempts: %v",
+				err := fmt.Errorf("failed to set keys in database %d after %d attempts: %v",
 					db, rs.cfg.Redis.RetryAttempts, setErr)
+				rs.logger.WithField("db", db).Error(err.Error())
+				return err
 			}
 		}
 	}

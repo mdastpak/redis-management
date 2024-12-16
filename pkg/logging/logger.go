@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"redis-management/pkg/errors"
 	"sync"
+	"time"
 )
 
 // Context key type
@@ -60,6 +62,7 @@ type logger struct {
 
 	// Optional error handler
 	errorHandler ErrorHandler
+	lastError    *errors.RedisError
 }
 
 // Hook allows adding additional processing for log entries
@@ -77,12 +80,13 @@ type LoggerOption func(*logger)
 // NewLogger creates a new logger with the given options
 func NewLogger(options ...LoggerOption) Logger {
 	l := &logger{
-		level:     InfoLevel,
-		formatter: NewJSONFormatter(),
-		output:    os.Stdout,
-		fields:    make(map[string]interface{}),
+		level:     InfoLevel,                    // default level
+		formatter: NewFormatter(FormatJSON),     // default formatter
+		output:    os.Stdout,                    // default output
+		fields:    make(map[string]interface{}), // initialize fields map
 	}
 
+	// Apply options
 	for _, option := range options {
 		option(l)
 	}
@@ -123,15 +127,25 @@ func WithErrorHandler(handler ErrorHandler) LoggerOption {
 
 // Log implements the core logging logic
 func (l *logger) Log(entry *Entry) {
+	// Add debugging log
+	// fmt.Printf("Logging entry: %+v\n", entry)
+	// fmt.Printf("Using formatter: %+v\n", l.formatter)
+	// fmt.Printf("Writing to output: %+v\n", l.output)
+
+	// Check log level first
 	if entry.Level < l.level {
 		return
 	}
 
+	// Thread safety
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	// Clone entry to prevent data races
 	newEntry := entry.clone()
+
+	// fmt.Printf("Real entry: %+v\n", entry)
+	// fmt.Printf("Cloned entry: %+v\n", newEntry)
 
 	// Add shared fields
 	for k, v := range l.fields {
@@ -148,7 +162,8 @@ func (l *logger) Log(entry *Entry) {
 	// Process hooks
 	for _, hook := range l.hooks {
 		if err := hook.Fire(newEntry); err != nil && l.errorHandler != nil {
-			l.errorHandler(err)
+			l.errorHandler(fmt.Errorf("hook execution failed: %w", err))
+			continue // Continue with other hooks even if one fails
 		}
 	}
 
@@ -156,14 +171,20 @@ func (l *logger) Log(entry *Entry) {
 	output, err := l.formatter.Format(newEntry)
 	if err != nil {
 		if l.errorHandler != nil {
-			l.errorHandler(err)
+			l.errorHandler(fmt.Errorf("entry formatting failed: %w", err))
 		}
 		return
 	}
 
+	// fmt.Printf("Formatted output: %s\n", string(output))
+
 	// Write to output
-	if _, err := l.output.Write(output); err != nil && l.errorHandler != nil {
-		l.errorHandler(err)
+	_, err = l.output.Write(output)
+	if err != nil {
+		if l.errorHandler != nil {
+			l.errorHandler(fmt.Errorf("log writing failed: %w", err))
+		}
+		return
 	}
 
 	// Handle fatal logs
@@ -194,7 +215,14 @@ func (l *logger) WithFields(fields map[string]interface{}) Logger {
 }
 
 func (l *logger) WithError(err error) Logger {
-	return l.WithField("error", err)
+	newLogger := l.clone()
+	if redisErr, ok := err.(*errors.RedisError); ok {
+		newLogger.lastError = redisErr
+	} else {
+		newLogger.fields["error"] = err.Error()
+	}
+	return newLogger
+
 }
 
 // WithContext adds context information to the logger
@@ -226,12 +254,71 @@ func (l *logger) logf(level Level, format string, args ...interface{}) {
 	l.log(level, fmt.Sprintf(format, args...))
 }
 
-func (l *logger) Trace(msg string) { l.log(TraceLevel, msg) }
-func (l *logger) Debug(msg string) { l.log(DebugLevel, msg) }
-func (l *logger) Info(msg string)  { l.log(InfoLevel, msg) }
-func (l *logger) Warn(msg string)  { l.log(WarnLevel, msg) }
-func (l *logger) Error(msg string) { l.log(ErrorLevel, msg) }
-func (l *logger) Fatal(msg string) { l.log(FatalLevel, msg) }
+func (l *logger) Trace(msg string) {
+	if l.level <= TraceLevel {
+		l.Log(&Entry{
+			Level:     TraceLevel,
+			Message:   msg,
+			Timestamp: time.Now(),
+			Fields:    l.fields,
+		})
+	}
+}
+
+func (l *logger) Debug(msg string) {
+	if l.level <= DebugLevel {
+		l.Log(&Entry{
+			Level:     DebugLevel,
+			Message:   msg,
+			Timestamp: time.Now(),
+			Fields:    l.fields,
+		})
+	}
+}
+func (l *logger) Info(msg string) {
+	if l.level <= InfoLevel {
+		l.Log(&Entry{
+			Level:     InfoLevel,
+			Message:   msg,
+			Timestamp: time.Now(),
+			Fields:    l.fields,
+		})
+	}
+}
+
+func (l *logger) Warn(msg string) {
+	if l.level <= WarnLevel {
+		l.Log(&Entry{
+			Level:     WarnLevel,
+			Message:   msg,
+			Timestamp: time.Now(),
+			Fields:    l.fields,
+		})
+	}
+}
+
+func (l *logger) Error(msg string) {
+	if l.level <= ErrorLevel {
+		l.Log(&Entry{
+			Level:      ErrorLevel,
+			Message:    msg,
+			Timestamp:  time.Now(),
+			Fields:     l.fields,
+			RedisError: l.lastError,
+		})
+	}
+}
+
+func (l *logger) Fatal(msg string) {
+	if l.level <= FatalLevel {
+		l.Log(&Entry{
+			Level:     FatalLevel,
+			Message:   msg,
+			Timestamp: time.Now(),
+			Fields:    l.fields,
+		})
+	}
+}
 
 func (l *logger) Tracef(format string, args ...interface{}) { l.logf(TraceLevel, format, args...) }
 func (l *logger) Debugf(format string, args ...interface{}) { l.logf(DebugLevel, format, args...) }
@@ -246,19 +333,20 @@ func (l *logger) clone() *logger {
 		level:        l.level,
 		formatter:    l.formatter,
 		output:       l.output,
-		errorHandler: l.errorHandler,
-		hooks:        make([]Hook, len(l.hooks)),
-		fields:       make(map[string]interface{}),
+		fields:       make(map[string]interface{}, len(l.fields)),
 		component:    l.component,
+		hooks:        make([]Hook, len(l.hooks)),
+		errorHandler: l.errorHandler,
+		lastError:    l.lastError,
 	}
-
-	// Copy hooks
-	copy(newLogger.hooks, l.hooks)
 
 	// Copy fields
 	for k, v := range l.fields {
 		newLogger.fields[k] = v
 	}
+
+	// Copy hooks
+	copy(newLogger.hooks, l.hooks)
 
 	return newLogger
 }

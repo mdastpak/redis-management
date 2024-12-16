@@ -42,21 +42,34 @@ func (f *JSONFormatter) Format(entry *Entry) ([]byte, error) {
 
 	// Add basic fields
 	if !f.DisableTimestamp {
-		data[f.getFieldName("time")] = entry.Timestamp.Format(f.TimestampFormat)
+		timestampFormat := f.TimestampFormat
+		if timestampFormat == "" {
+			timestampFormat = time.RFC3339
+		}
+		data["time"] = entry.Timestamp.Format(timestampFormat)
 	}
 
-	data[f.getFieldName("msg")] = entry.Message
-	data[f.getFieldName("level")] = entry.Level.String()
+	// fmt.Printf("entry: %v\n", entry)
+	// fmt.Printf("entry.Message: %v\n", entry.Message)
+
+	data["msg"] = entry.Message
+	data["level"] = entry.Level.String()
+
+	// // Add caller information if available
+	// if entry.CallerFunc != "" {
+	// 	data[f.getFieldName("caller")] = fmt.Sprintf("%s:%d", entry.CallerFile, entry.CallerLine)
+	// 	data["function"] = entry.CallerFunc
+	// }
 
 	// Add caller information if available
 	if entry.CallerFunc != "" {
-		data[f.getFieldName("caller")] = fmt.Sprintf("%s:%d", entry.CallerFile, entry.CallerLine)
+		data["caller"] = fmt.Sprintf("%s:%d", entry.CallerFile, entry.CallerLine)
 		data["function"] = entry.CallerFunc
 	}
 
 	// Add trace information
 	if entry.TraceID != "" {
-		data[f.getFieldName("trace_id")] = entry.TraceID
+		data["trace_id"] = entry.TraceID
 	}
 
 	// Add operation if available
@@ -76,15 +89,16 @@ func (f *JSONFormatter) Format(entry *Entry) ([]byte, error) {
 
 	// Add error information
 	if entry.RedisError != nil {
-		errorData := make(map[string]interface{})
-		errorData["message"] = entry.RedisError.Message
-		errorData["code"] = entry.RedisError.Code
+		errorData := map[string]interface{}{
+			"message": entry.RedisError.Message,
+			"code":    entry.RedisError.Code,
+		}
 		if len(entry.RedisError.Fields) > 0 {
 			errorData["fields"] = entry.RedisError.Fields
 		}
-		data[f.getFieldName("error")] = errorData
+		data["error"] = errorData
 	} else if entry.ErrorText != "" {
-		data[f.getFieldName("error")] = entry.ErrorText
+		data["error"] = entry.ErrorText
 	}
 
 	// Add custom fields
@@ -97,6 +111,9 @@ func (f *JSONFormatter) Format(entry *Entry) ([]byte, error) {
 			data[key] = v
 		}
 	}
+
+	// For debugging
+	// fmt.Printf("Data before JSON encoding: %+v\n", data)
 
 	var encoder *json.Encoder
 	buf := &bytes.Buffer{}

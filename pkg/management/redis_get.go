@@ -9,19 +9,23 @@ import (
 	"github.com/go-redis/redis/v8"
 )
 
-// Modify Get method similarly
+// Get retrieves a value by key
 func (rs *RedisService) Get(ctx context.Context, key string) (string, error) {
 	return rs.operationManager.ExecuteReadOp(ctx, "GET", func() (string, error) {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
 			var result string
 			err := rs.cb.Execute(func() error {
-				var err error
-				result, err = rs.get(ctx, key)
-				return err
+				var getErr error
+				result, getErr = rs.wrapper.WrapGet(ctx, key, func() (string, error) {
+					return rs.get(ctx, key)
+				})
+				return getErr
 			})
 			return result, err
 		}
-		return rs.get(ctx, key)
+		return rs.wrapper.WrapGet(ctx, key, func() (string, error) {
+			return rs.get(ctx, key)
+		})
 	})
 }
 
@@ -31,13 +35,17 @@ func (rs *RedisService) GetBatch(ctx context.Context, keys []string) (map[string
 		if rs.cb != nil && rs.cfg.Circuit.Status {
 			var result map[string]string
 			err := rs.cb.Execute(func() error {
-				var err error
-				result, err = rs.getBatch(ctx, keys)
-				return err
+				var getBatchErr error
+				result, getBatchErr = rs.wrapper.WrapBatchGet(ctx, keys, func() (map[string]string, error) {
+					return rs.getBatch(ctx, keys)
+				})
+				return getBatchErr
 			})
 			return result, err
 		}
-		return rs.getBatch(ctx, keys)
+		return rs.wrapper.WrapBatchGet(ctx, keys, func() (map[string]string, error) {
+			return rs.getBatch(ctx, keys)
+		})
 	})
 }
 
@@ -45,18 +53,24 @@ func (rs *RedisService) GetBatch(ctx context.Context, keys []string) (map[string
 func (rs *RedisService) get(ctx context.Context, key string) (string, error) {
 	client := rs.getClient()
 	if client == nil {
-		return "", fmt.Errorf("redis client is not initialized")
+		err := fmt.Errorf("redis client is not initialized")
+		rs.logger.WithField("key", key).Error(err.Error())
+		return "", err
 	}
 
 	finalKey := rs.keyMgr.GetKey(key)
 	db, err := rs.keyMgr.GetShardIndex(key)
 	if err != nil {
-		return "", fmt.Errorf("failed to get shard index: %v", err)
+		err := fmt.Errorf("failed to get shard index: %v", err)
+		rs.logger.WithField("key", key).Error(err.Error())
+		return "", err
 	}
 
 	// Select appropriate database
 	if err := client.Do(ctx, "SELECT", db).Err(); err != nil {
-		return "", fmt.Errorf("failed to select database: %v", err)
+		err := fmt.Errorf("failed to select database: %v", err)
+		rs.logger.WithField("key", key).Error(err.Error())
+		return "", err
 	}
 
 	// Perform GET operation with retry logic
@@ -67,7 +81,9 @@ func (rs *RedisService) get(ctx context.Context, key string) (string, error) {
 			return value, nil
 		}
 		if err == redis.Nil {
-			return "", fmt.Errorf("key not found")
+			err = fmt.Errorf("key not found")
+			rs.logger.WithField("key", key).Warn(err.Error())
+			return "", err
 		}
 
 		getErr = err
@@ -81,7 +97,10 @@ func (rs *RedisService) get(ctx context.Context, key string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("failed to get key after %d attempts: %v", rs.cfg.Redis.RetryAttempts, getErr)
+	// Log error and return
+	err = fmt.Errorf("failed to get key after %d attempts: %v", rs.cfg.Redis.RetryAttempts, getErr)
+	rs.logger.WithField("key", key).Error(err.Error())
+	return "", err
 }
 
 // getBatch performs the actual batch get operation
@@ -92,7 +111,9 @@ func (rs *RedisService) getBatch(ctx context.Context, keys []string) (map[string
 
 	client := rs.getClient()
 	if client == nil {
-		return nil, fmt.Errorf("redis client is not initialized")
+		err := fmt.Errorf("redis client is not initialized")
+		rs.logger.WithField("keys", keys).Error(err.Error())
+		return nil, err
 	}
 
 	// Group keys by database
@@ -102,7 +123,9 @@ func (rs *RedisService) getBatch(ctx context.Context, keys []string) (map[string
 		finalKey := rs.keyMgr.GetKey(key)
 		db, err := rs.keyMgr.GetShardIndex(key)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get shard index for key %s: %v", key, err)
+			err := fmt.Errorf("failed to get shard index for key %s: %v", key, err)
+			rs.logger.WithField("key", key).Error(err.Error())
+			return nil, err
 		}
 		keysByDB[db] = append(keysByDB[db], finalKey)
 		keyMap[finalKey] = key // store mapping of final key to original key
@@ -116,7 +139,9 @@ func (rs *RedisService) getBatch(ctx context.Context, keys []string) (map[string
 	for db, dbKeys := range keysByDB {
 		// Select database
 		if err := pipe.Do(ctx, "SELECT", db).Err(); err != nil {
-			return nil, fmt.Errorf("failed to select database %d: %v", db, err)
+			err := fmt.Errorf("failed to select database %d: %v", db, err)
+			rs.logger.WithField("db", db).Error(err.Error())
+			return nil, err
 		}
 
 		// Add all keys to pipeline
@@ -141,7 +166,9 @@ func (rs *RedisService) getBatch(ctx context.Context, keys []string) (map[string
 							continue // Skip not found keys
 						}
 						if err != nil {
-							return nil, fmt.Errorf("failed to get value: %v", err)
+							err := fmt.Errorf("failed to get value: %v", err)
+							rs.logger.WithField("key", dbKeys[i-1]).Error(err.Error())
+							return nil, err
 						}
 						finalKey := dbKeys[i-1]
 						originalKey := keyMap[finalKey]
@@ -159,8 +186,10 @@ func (rs *RedisService) getBatch(ctx context.Context, keys []string) (map[string
 				}
 				time.Sleep(backoff)
 			} else {
-				return nil, fmt.Errorf("failed to get keys from database %d after %d attempts: %v",
+				err := fmt.Errorf("failed to get keys from database %d after %d attempts: %v",
 					db, rs.cfg.Redis.RetryAttempts, getErr)
+				rs.logger.WithField("db", db).Error(err.Error())
+				return nil, err
 			}
 		}
 	}

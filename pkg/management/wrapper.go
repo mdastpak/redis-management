@@ -19,7 +19,7 @@ type OperationWrapper struct {
 func NewOperationWrapper(service *RedisService, logger logging.Logger) *OperationWrapper {
 	return &OperationWrapper{
 		service: service,
-		logger:  logger,
+		logger:  logger.WithComponent("redis"),
 	}
 }
 
@@ -38,6 +38,11 @@ type ResultType interface {
 
 // WrapOperation wraps a Redis operation with common functionality
 func (w *OperationWrapper) WrapOperation(ctx context.Context, operation string, fields map[string]interface{}, fn func() error) error {
+	// Check context cancellation first
+	if err := ctx.Err(); err != nil {
+		return err // Return context error directly
+	}
+
 	opCtx := &operationContext{
 		ctx:       ctx,
 		operation: operation,
@@ -45,15 +50,13 @@ func (w *OperationWrapper) WrapOperation(ctx context.Context, operation string, 
 		start:     time.Now(),
 	}
 
+	logger := w.logger.WithContext(ctx).
+		WithField("operation", operation).
+		WithFields(fields)
+
 	// Create error builder
 	errBuilder := errors.NewErrorBuilderFromContext(ctx).
 		WithOperation(operation).
-		WithFields(fields)
-
-	// Initialize logger for this operation
-	logger := w.logger.
-		WithContext(ctx).
-		WithField("operation", operation).
 		WithFields(fields)
 
 	// Log operation start
@@ -68,6 +71,11 @@ func (w *OperationWrapper) WrapOperation(ctx context.Context, operation string, 
 
 // WrapOperationWithResult wraps a Redis operation that returns a result
 func (w *OperationWrapper) WrapOperationWithResult(ctx context.Context, operation string, fields map[string]interface{}, fn func() (interface{}, error)) (interface{}, error) {
+	// Check context cancellation first
+	if err := ctx.Err(); err != nil {
+		return nil, err // Return context error directly
+	}
+
 	opCtx := &operationContext{
 		ctx:       ctx,
 		operation: operation,
@@ -75,19 +83,16 @@ func (w *OperationWrapper) WrapOperationWithResult(ctx context.Context, operatio
 		start:     time.Now(),
 	}
 
+	logger := w.logger.WithContext(ctx).
+		WithField("operation", operation).
+		WithFields(fields)
+
+	logger.Debug("starting operation")
+
 	// Create error builder
 	errBuilder := errors.NewErrorBuilderFromContext(ctx).
 		WithOperation(operation).
 		WithFields(fields)
-
-	// Initialize logger for this operation
-	logger := w.logger.
-		WithContext(ctx).
-		WithField("operation", operation).
-		WithFields(fields)
-
-	// Log operation start
-	logger.Debug("starting operation")
 
 	// Execute operation
 	result, err := w.executeOperationWithResult(opCtx, fn)
@@ -98,6 +103,119 @@ func (w *OperationWrapper) WrapOperationWithResult(ctx context.Context, operatio
 	}
 
 	return result, nil
+}
+
+// Specific operation wrappers
+func (w *OperationWrapper) WrapGet(ctx context.Context, key string, fn func() (string, error)) (string, error) {
+	fields := map[string]interface{}{
+		"key": key,
+	}
+
+	wrappedFn := func() (interface{}, error) {
+		return fn()
+	}
+
+	result, err := w.WrapOperationWithResult(ctx, "GET", fields, wrappedFn)
+	if err != nil {
+		return "", err
+	}
+
+	if strResult, ok := result.(string); ok {
+		return strResult, nil
+	}
+	return "", fmt.Errorf("unexpected result type from operation")
+}
+
+func (w *OperationWrapper) WrapSet(ctx context.Context, key string, value interface{}, fn func() error) error {
+	fields := map[string]interface{}{
+		"key":        key,
+		"value_type": fmt.Sprintf("%T", value),
+	}
+	return w.WrapOperation(ctx, "SET", fields, fn)
+}
+
+func (w *OperationWrapper) WrapDelete(ctx context.Context, key string, fn func() error) error {
+	fields := map[string]interface{}{
+		"key": key,
+	}
+	return w.WrapOperation(ctx, "DELETE", fields, fn)
+}
+
+// WrapTTL wraps a TTL operation
+func (w *OperationWrapper) WrapTTL(ctx context.Context, key string, fn func() (time.Duration, error)) (time.Duration, error) {
+	fields := map[string]interface{}{
+		"key": key,
+	}
+	wrappedFn := func() (interface{}, error) {
+		return fn()
+	}
+	result, err := w.WrapOperationWithResult(ctx, "TTL", fields, wrappedFn)
+	if err != nil {
+		return 0, err
+	}
+	duration, ok := result.(time.Duration)
+	if !ok {
+		return 0, fmt.Errorf("unexpected result type from TTL operation")
+	}
+	return duration, nil
+}
+
+func (w *OperationWrapper) WrapBatchGet(ctx context.Context, keys []string, fn func() (map[string]string, error)) (map[string]string, error) {
+	fields := map[string]interface{}{
+		"keys":       keys,
+		"keys_count": len(keys),
+	}
+
+	wrappedFn := func() (interface{}, error) {
+		return fn()
+	}
+
+	result, err := w.WrapOperationWithResult(ctx, "MGET", fields, wrappedFn)
+	if err != nil {
+		return nil, err
+	}
+
+	if mapResult, ok := result.(map[string]string); ok {
+		return mapResult, nil
+	}
+	return nil, fmt.Errorf("unexpected result type from operation")
+}
+
+func (w *OperationWrapper) WrapBatchSet(ctx context.Context, items map[string]interface{}, fn func() error) error {
+	fields := map[string]interface{}{
+		"items_count": len(items),
+		"keys":        keysFromMap(items),
+	}
+	return w.WrapOperation(ctx, "MSET", fields, fn)
+}
+
+// WrapBatchDelete wraps a batch DELETE operation
+func (w *OperationWrapper) WrapBatchDelete(ctx context.Context, keys []string, fn func() error) error {
+	fields := map[string]interface{}{
+		"keys_count": len(keys),
+		"keys":       keys,
+	}
+	return w.WrapOperation(ctx, "BATCH_DELETE", fields, fn)
+}
+
+// WrapBatchTTL wraps a batch TTL operation
+func (w *OperationWrapper) WrapBatchTTL(ctx context.Context, keys []string, fn func() (map[string]time.Duration, error)) (map[string]time.Duration, error) {
+	fields := map[string]interface{}{
+		"keys_count": len(keys),
+		"keys":       keys,
+	}
+	wrappedFn := func() (interface{}, error) {
+		return fn()
+	}
+	result, err := w.WrapOperationWithResult(ctx, "BATCH_TTL", fields, wrappedFn)
+	if err != nil {
+		return nil, err
+	}
+	ttls, ok := result.(map[string]time.Duration)
+	if !ok {
+		return nil, fmt.Errorf("unexpected result type from batch TTL operation")
+	}
+	return ttls, nil
 }
 
 // executeOperation executes the operation with common checks
@@ -147,7 +265,10 @@ func (w *OperationWrapper) executeOperationWithResult(opCtx *operationContext, f
 // handleOperationResult processes the operation result and handles logging
 func (w *OperationWrapper) handleOperationResult(opCtx *operationContext, err error, errBuilder *errors.ErrorBuilder, logger logging.Logger) error {
 	duration := time.Since(opCtx.start)
-	logger = logger.WithField("duration_ms", float64(duration)/float64(time.Millisecond))
+	fields := map[string]interface{}{
+		"duration_ms": float64(duration) / float64(time.Millisecond),
+		"operation":   opCtx.operation,
+	}
 
 	if err != nil {
 		// Convert to RedisError if it isn't already
@@ -162,7 +283,7 @@ func (w *OperationWrapper) handleOperationResult(opCtx *operationContext, err er
 		}
 
 		// Log error with context
-		logger.WithError(redisErr).Error("operation failed")
+		logger.WithFields(fields).WithError(redisErr).Error("operation failed")
 
 		// Update metrics
 		w.service.operationManager.UpdateMetrics(duration, false)
@@ -171,7 +292,7 @@ func (w *OperationWrapper) handleOperationResult(opCtx *operationContext, err er
 	}
 
 	// Log success
-	logger.Info("operation completed successfully")
+	logger.WithFields(fields).Debug("operation completed successfully")
 
 	// Update metrics
 	w.service.operationManager.UpdateMetrics(duration, true)
@@ -179,53 +300,12 @@ func (w *OperationWrapper) handleOperationResult(opCtx *operationContext, err er
 	return nil
 }
 
-// Common wrapper methods for different operation types
+// Helper functions
 
-// WrapGet wraps a GET operation
-func (w *OperationWrapper) WrapGet(ctx context.Context, key string, fn func() (string, error)) (string, error) {
-	fields := map[string]interface{}{
-		"key": key,
+func keysFromMap(items map[string]interface{}) []string {
+	keys := make([]string, 0, len(items))
+	for k := range items {
+		keys = append(keys, k)
 	}
-
-	// Create a wrapper function that converts string to interface{}
-	wrappedFn := func() (interface{}, error) {
-		return fn()
-	}
-
-	result, err := w.WrapOperationWithResult(ctx, "GET", fields, wrappedFn)
-	if err != nil {
-		return "", err
-	}
-
-	// Add type assertion
-	if strResult, ok := result.(string); ok {
-		return strResult, nil
-	}
-	return "", fmt.Errorf("unexpected result type from operation")
-}
-
-// WrapSet wraps a SET operation
-func (w *OperationWrapper) WrapSet(ctx context.Context, key string, value interface{}, fn func() error) error {
-	fields := map[string]interface{}{
-		"key":        key,
-		"value_type": fmt.Sprintf("%T", value),
-	}
-	return w.WrapOperation(ctx, "SET", fields, fn)
-}
-
-// WrapDelete wraps a DELETE operation
-func (w *OperationWrapper) WrapDelete(ctx context.Context, key string, fn func() error) error {
-	fields := map[string]interface{}{
-		"key": key,
-	}
-	return w.WrapOperation(ctx, "DELETE", fields, fn)
-}
-
-// WrapBatch wraps a batch operation
-func (w *OperationWrapper) WrapBatch(ctx context.Context, operation string, keys []string, fn func() error) error {
-	fields := map[string]interface{}{
-		"keys_count": len(keys),
-		"keys":       keys,
-	}
-	return w.WrapOperation(ctx, fmt.Sprintf("BATCH_%s", operation), fields, fn)
+	return keys
 }

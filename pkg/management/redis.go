@@ -45,6 +45,9 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 		logger:    logger,
 	}
 
+	// Create wrapper after service is initialized
+	service.wrapper = NewOperationWrapper(service, logger)
+
 	// Initialize operation manager
 	service.operationManager, err = NewOperationManager(service)
 	if err != nil {
@@ -120,7 +123,7 @@ func (rs *RedisService) connect() error {
 		return fmt.Errorf("failed to ping Redis: %v", err)
 	}
 
-	rs.logger.Info("Successfully connected to Redis")
+	// rs.logger.Info("Successfully connected to Redis")
 	return nil
 }
 
@@ -167,7 +170,7 @@ func (rs *RedisService) Close(ctx context.Context) error {
 		return fmt.Errorf("errors during shutdown: %v", errs)
 	}
 
-	rs.logger.Info("Service shutdown completed successfully")
+	// rs.logger.Info("Service shutdown completed successfully")
 	return nil
 }
 

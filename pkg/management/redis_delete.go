@@ -7,16 +7,19 @@ import (
 	"time"
 )
 
-// Delete method with circuit breaker support
+// Delete removes a key from Redis
 func (rs *RedisService) Delete(ctx context.Context, key string) error {
 	return rs.operationManager.ExecuteWithLock(ctx, "DEL", func() error {
-
 		if rs.cb != nil && rs.cfg.Circuit.Status {
 			return rs.cb.Execute(func() error {
-				return rs.delete(ctx, key)
+				return rs.wrapper.WrapDelete(ctx, key, func() error {
+					return rs.delete(ctx, key)
+				})
 			})
 		}
-		return rs.delete(ctx, key)
+		return rs.wrapper.WrapDelete(ctx, key, func() error {
+			return rs.delete(ctx, key)
+		})
 	})
 }
 
@@ -29,18 +32,24 @@ func (rs *RedisService) delete(ctx context.Context, key string) error {
 
 	client := rs.getClient()
 	if client == nil {
-		return fmt.Errorf("redis client is not initialized")
+		err := fmt.Errorf("redis client is not initialized")
+		rs.logger.WithField("key", key).Error(err.Error())
+		return err
 	}
 
 	finalKey := rs.keyMgr.GetKey(key)
 	db, err := rs.keyMgr.GetShardIndex(key)
 	if err != nil {
-		return fmt.Errorf("failed to get shard index: %v", err)
+		err := fmt.Errorf("failed to get shard index: %v", err)
+		rs.logger.WithField("key", key).Error(err.Error())
+		return err
 	}
 
 	// Select appropriate database
 	if err := client.Do(ctx, "SELECT", db).Err(); err != nil {
-		return fmt.Errorf("failed to select database: %v", err)
+		err := fmt.Errorf("failed to select database: %v", err)
+		rs.logger.WithField("key", key).Error(err.Error())
+		return err
 	}
 
 	// Perform DELETE operation with retry logic
@@ -62,18 +71,26 @@ func (rs *RedisService) delete(ctx context.Context, key string) error {
 		}
 	}
 
-	return fmt.Errorf("failed to delete key after %d attempts: %v",
+	err = fmt.Errorf("failed to delete key after %d attempts: %v",
 		rs.cfg.Redis.RetryAttempts, delErr)
+	rs.logger.WithField("key", key).Error(err.Error())
+	return err
 }
 
 // DeleteBatch removes multiple keys in a single operation
 func (rs *RedisService) DeleteBatch(ctx context.Context, keys []string) error {
-	if rs.cb != nil && rs.cfg.Circuit.Status {
-		return rs.cb.Execute(func() error {
+	return rs.operationManager.ExecuteWithLock(ctx, "MDEL", func() error {
+		if rs.cb != nil && rs.cfg.Circuit.Status {
+			return rs.cb.Execute(func() error {
+				return rs.wrapper.WrapBatchDelete(ctx, keys, func() error {
+					return rs.deleteBatch(ctx, keys)
+				})
+			})
+		}
+		return rs.wrapper.WrapBatchDelete(ctx, keys, func() error {
 			return rs.deleteBatch(ctx, keys)
 		})
-	}
-	return rs.deleteBatch(ctx, keys)
+	})
 }
 
 // deleteBatch performs the actual batch delete operation
@@ -84,7 +101,9 @@ func (rs *RedisService) deleteBatch(ctx context.Context, keys []string) error {
 
 	client := rs.getClient()
 	if client == nil {
-		return fmt.Errorf("redis client is not initialized")
+		err := fmt.Errorf("redis client is not initialized")
+		rs.logger.WithField("keys", keys).Error(err.Error())
+		return err
 	}
 
 	// Group keys by database for efficiency
@@ -93,7 +112,9 @@ func (rs *RedisService) deleteBatch(ctx context.Context, keys []string) error {
 		finalKey := rs.keyMgr.GetKey(key)
 		db, err := rs.keyMgr.GetShardIndex(key)
 		if err != nil {
-			return fmt.Errorf("failed to get shard index for key %s: %v", key, err)
+			err := fmt.Errorf("failed to get shard index for key %s: %v", key, err)
+			rs.logger.WithField("key", key).Error(err.Error())
+			return err
 		}
 		keysByDB[db] = append(keysByDB[db], finalKey)
 	}
@@ -102,7 +123,9 @@ func (rs *RedisService) deleteBatch(ctx context.Context, keys []string) error {
 	for db, dbKeys := range keysByDB {
 		// Select database
 		if err := client.Do(ctx, "SELECT", db).Err(); err != nil {
-			return fmt.Errorf("failed to select database %d: %v", db, err)
+			err := fmt.Errorf("failed to select database %d: %v", db, err)
+			rs.logger.WithField("db", db).Error(err.Error())
+			return err
 		}
 
 		// Perform batch delete with retry logic
@@ -121,8 +144,10 @@ func (rs *RedisService) deleteBatch(ctx context.Context, keys []string) error {
 				}
 				time.Sleep(backoff)
 			} else {
-				return fmt.Errorf("failed to delete keys in database %d after %d attempts: %v",
+				err = fmt.Errorf("failed to delete keys in database %d after %d attempts: %v",
 					db, rs.cfg.Redis.RetryAttempts, delErr)
+				rs.logger.WithField("keys", dbKeys).Error(err.Error())
+				return err
 			}
 		}
 	}

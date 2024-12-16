@@ -28,6 +28,8 @@ func setupTestRedis(ctx context.Context) (*RedisService, error) {
 		return nil, err
 	}
 
+	fmt.Printf("Service initialized with wrapper: %v\n", rs.wrapper != nil)
+
 	return rs, nil
 }
 
