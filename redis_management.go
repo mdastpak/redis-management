@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"redis-management/config"
-	"redis-management/pkg/management"
+	"github.com/mdastpak/redis-management/config"
+	"github.com/mdastpak/redis-management/pkg/management"
 )
 
 // Client represents the main Redis management client

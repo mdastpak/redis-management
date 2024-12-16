@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"redis-management/config"
+	"github.com/mdastpak/redis-management/config"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

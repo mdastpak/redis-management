@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"redis-management/config"
-	"redis-management/pkg/logging"
+	"github.com/mdastpak/redis-management/config"
+	"github.com/mdastpak/redis-management/pkg/logging"
 
 	"github.com/go-redis/redis/v8"
 )

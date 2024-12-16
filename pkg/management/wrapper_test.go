@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"redis-management/pkg/errors"
-	"redis-management/pkg/logging"
+	"github.com/mdastpak/redis-management/pkg/errors"
+	"github.com/mdastpak/redis-management/pkg/logging"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

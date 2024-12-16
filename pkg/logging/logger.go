@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"redis-management/pkg/errors"
 	"sync"
 	"time"
+
+	"github.com/mdastpak/redis-management/pkg/errors"
 )
 
 // Context key type

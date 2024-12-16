@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"redis-management/config"
+	"github.com/mdastpak/redis-management/config"
 
 	"github.com/go-redis/redis/v8"
 )

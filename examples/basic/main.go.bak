@@ -7,8 +7,8 @@ import (
 	"log"
 	"time"
 
-	"redis-management/config"
-	"redis-management/pkg/management"
+	"github.com/mdastpak/redis-management/config"
+	"github.com/mdastpak/redis-management/pkg/management"
 )
 
 func main() {
