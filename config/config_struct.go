@@ -6,9 +6,9 @@ import "time"
 type Config struct {
 	Redis   RedisConfig   `mapstructure:"redis"`
 	Pool    PoolConfig    `mapstructure:"pool"`
-	Bulk    BulkConfig    `mapstructure:"bulk"`
 	Circuit CircuitConfig `mapstructure:"circuit"`
 	Logging LoggingConfig `mapstructure:"logging"`
+	Timeout TimeoutConfig `mapstructure:"timeout"`
 }
 
 // RedisConfig holds Redis-specific configuration
@@ -35,15 +35,6 @@ type PoolConfig struct {
 	MinIdle     int  `mapstructure:"min_idle"`
 	MaxIdleTime int  `mapstructure:"max_idle_time"`
 	WaitTimeout int  `mapstructure:"wait_timeout"`
-}
-
-// BulkConfig holds bulk operation configuration
-type BulkConfig struct {
-	Status          bool `mapstructure:"status"`
-	BatchSize       int  `mapstructure:"batch_size"`
-	FlushInterval   int  `mapstructure:"flush_interval"`
-	MaxRetries      int  `mapstructure:"max_retries"`
-	ConcurrentFlush bool `mapstructure:"concurrent_flush"`
 }
 
 type CircuitConfig struct {

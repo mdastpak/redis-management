@@ -10,16 +10,16 @@ func setDefaults(v *viper.Viper) {
 	// Redis defaults
 	v.SetDefault("redis.host", "localhost")
 	v.SetDefault("redis.port", "6379")
-	v.SetDefault("redis.db", "0")                              // Can be single number or range (e.g., "0" or "0-5")
-	v.SetDefault("redis.key_prefix", "")                       // Optional prefix for all keys
-	v.SetDefault("redis.ttl", time.Second*60)                  //Default TTL for keys in seconds
-	v.SetDefault("redis.timeout", time.Second*5)               //Connection timeout in seconds
-	v.SetDefault("redis.hash_keys", true)                      //Whether to hash keys using SHA-256
-	v.SetDefault("redis.health_check_interval", time.Second*1) //Health check interval in seconds
-	v.SetDefault("redis.retry_attempts", 3)                    //Number of retry attempts for failed operations
-	v.SetDefault("redis.retry_delay", 1000)                    // Delay between retry attempts in milliseconds
-	v.SetDefault("redis.max_retry_backoff", 5000)              // Maximum backoff time in milliseconds
-	v.SetDefault("redis.shutdown_timeout", time.Second*30)     // Timeout for graceful shutdown in seconds
+	v.SetDefault("redis.db", "0")                                // Can be single number or range (e.g., "0" or "0-5")
+	v.SetDefault("redis.key_prefix", "")                         // Optional prefix for all keys
+	v.SetDefault("redis.ttl", time.Second*60)                    //Default TTL for keys in seconds
+	v.SetDefault("redis.timeout", time.Second*5)                 //Connection timeout in seconds
+	v.SetDefault("redis.hash_keys", true)                        //Whether to hash keys using SHA-256
+	v.SetDefault("redis.health_check_interval", time.Second*1)   //Health check interval in seconds
+	v.SetDefault("redis.retry_attempts", 3)                      //Number of retry attempts for failed operations
+	v.SetDefault("redis.retry_delay", 1000)                      // Delay between retry attempts in milliseconds
+	v.SetDefault("redis.max_retry_backoff", 5000)                // Maximum backoff time in milliseconds
+	v.SetDefault("redis.shutdown_timeout", time.Millisecond*100) // Timeout for graceful shutdown in seconds
 
 	// Pool defaults
 	v.SetDefault("pool.status", false)                // Enable/disable connection pooling
@@ -27,13 +27,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("pool.min_idle", 5)                  // Minimum number of idle connections in the pool
 	v.SetDefault("pool.max_idle_time", 300)           // Maximum time a connection can be idle in seconds
 	v.SetDefault("pool.wait_timeout", time.Second*30) // Timeout for waiting for a connection in seconds
-
-	// Bulk defaults
-	v.SetDefault("bulk.status", false)          // Enable/disable bulk operations
-	v.SetDefault("bulk.batch_size", 10)         // Maximum number of operations in a batch
-	v.SetDefault("bulk.flush_interval", 1)      // Maximum time between flushes in seconds
-	v.SetDefault("bulk.max_retries", 1)         // Maximum number of retries for failed bulk operations
-	v.SetDefault("bulk.concurrent_flush", true) // Whether to flush in a separate goroutine
 
 	// Circuit defaults
 	v.SetDefault("circuit.status", false)                 // Enable/disable circuit breaker
@@ -45,4 +38,23 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("logging.level", "info")    // Log level (trace, debug, info, warn, error, fatal, panic)
 	v.SetDefault("logging.format", "json")   // Log format (json, text)
 	v.SetDefault("logging.output", "stdout") // Log output (stdout, stderr, file)
+
+	// Timeout management defaults
+	v.SetDefault("timeout.base_timeout", time.Second*5)
+	v.SetDefault("timeout.max_timeout", time.Second*30)
+	v.SetDefault("timeout.min_timeout", time.Millisecond*100)
+	v.SetDefault("timeout.backoff_factor", 1.5)
+
+	// Operation timeout defaults
+	v.SetDefault("timeout.operations.get", time.Second*1)
+	v.SetDefault("timeout.operations.set", time.Second*2)
+	v.SetDefault("timeout.operations.delete", time.Second*2)
+	v.SetDefault("timeout.operations.bulk_base", time.Second*5)
+
+	// Adaptive timeout defaults
+	v.SetDefault("timeout.adaptive.enabled", true)
+	v.SetDefault("timeout.adaptive.window_size", 100)
+	v.SetDefault("timeout.adaptive.adjustment_threshold", 0.2) // 20%
+	v.SetDefault("timeout.adaptive.max_adjustment", 0.5)       // 50%
+	v.SetDefault("timeout.adaptive.history_retention", time.Hour*24)
 }

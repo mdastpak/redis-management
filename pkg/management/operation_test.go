@@ -1,7 +1,6 @@
 package management
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -12,23 +11,8 @@ import (
 func TestOperationManager(t *testing.T) {
 	t.Parallel()
 	t.Run("Operation Execution During Maintenance", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		// Initialize operation manager
 		om, err := NewOperationManager(rs)
@@ -67,23 +51,8 @@ func TestOperationManager(t *testing.T) {
 	})
 
 	t.Run("Operation Execution During Shutdown", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		// Initialize operation manager
 		om, err := NewOperationManager(rs)
@@ -108,23 +77,8 @@ func TestOperationManager(t *testing.T) {
 	})
 
 	t.Run("Batch Operations", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		// Initialize operation manager
 		om, err := NewOperationManager(rs)
@@ -148,23 +102,8 @@ func TestOperationManager(t *testing.T) {
 	})
 
 	t.Run("Status Reporting", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		// Initialize operation manager
 		om, err := NewOperationManager(rs)

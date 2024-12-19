@@ -9,27 +9,28 @@ import (
 
 // Delete removes a key from Redis
 func (rs *RedisService) Delete(ctx context.Context, key string) error {
-	return rs.operationManager.ExecuteWithLock(ctx, "DEL", func() error {
+	return rs.operationManager.ExecuteWithLock(ctx, "DELETE", func() error {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
 			return rs.cb.Execute(func() error {
+				return rs.timeoutManager.ExecuteWithRetry(ctx, "DELETE", 1, rs.cfg.Redis.RetryAttempts,
+					func(ctx context.Context) error {
+						return rs.wrapper.WrapDelete(ctx, key, func() error {
+							return rs.delete(ctx, key)
+						})
+					})
+			})
+		}
+		return rs.timeoutManager.ExecuteWithRetry(ctx, "DELETE", 1, rs.cfg.Redis.RetryAttempts,
+			func(ctx context.Context) error {
 				return rs.wrapper.WrapDelete(ctx, key, func() error {
 					return rs.delete(ctx, key)
 				})
 			})
-		}
-		return rs.wrapper.WrapDelete(ctx, key, func() error {
-			return rs.delete(ctx, key)
-		})
 	})
 }
 
 // delete performs the actual delete operation with retries and bulk support
 func (rs *RedisService) delete(ctx context.Context, key string) error {
-	// Check if bulk operations are enabled
-	if rs.cfg.Bulk.Status {
-		return rs.AddBulkOperation(ctx, "DEL", key, nil, 0)
-	}
-
 	client := rs.getClient()
 	if client == nil {
 		err := fmt.Errorf("redis client is not initialized")
@@ -82,14 +83,20 @@ func (rs *RedisService) DeleteBatch(ctx context.Context, keys []string) error {
 	return rs.operationManager.ExecuteWithLock(ctx, "MDEL", func() error {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
 			return rs.cb.Execute(func() error {
+				return rs.timeoutManager.ExecuteWithRetry(ctx, "BATCH", len(keys), rs.cfg.Redis.RetryAttempts,
+					func(ctx context.Context) error {
+						return rs.wrapper.WrapBatchDelete(ctx, keys, func() error {
+							return rs.deleteBatch(ctx, keys)
+						})
+					})
+			})
+		}
+		return rs.timeoutManager.ExecuteWithRetry(ctx, "BATCH", len(keys), rs.cfg.Redis.RetryAttempts,
+			func(ctx context.Context) error {
 				return rs.wrapper.WrapBatchDelete(ctx, keys, func() error {
 					return rs.deleteBatch(ctx, keys)
 				})
 			})
-		}
-		return rs.wrapper.WrapBatchDelete(ctx, keys, func() error {
-			return rs.deleteBatch(ctx, keys)
-		})
 	})
 }
 

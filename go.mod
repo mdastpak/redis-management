@@ -1,4 +1,4 @@
-module github.com/mdastpak/redis-management
+module redis-management
 
 go 1.23.2
 

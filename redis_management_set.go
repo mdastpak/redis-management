@@ -2,7 +2,6 @@ package redismanagement
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
@@ -50,22 +49,22 @@ func (c *Client) SetBatchWithContext(ctx context.Context, items map[string]inter
 // Bulk Set Operations
 // ***********************************************************************************
 
-// BulkSet performs multiple Set operations with specified TTL
-func (c *Client) SetBulk(items map[string]interface{}, ttl time.Duration) error {
-	return c.SetBulkWithContext(context.Background(), items, ttl)
-}
+// // BulkSet performs multiple Set operations with specified TTL
+// func (c *Client) SetBulk(items map[string]interface{}, ttl time.Duration) error {
+// 	return c.SetBulkWithContext(context.Background(), items, ttl)
+// }
 
-// BulkSetWithDefaultTTL performs multiple Set operations using configured default TTL
-func (c *Client) SetBulkWithDefaultTTL(items map[string]interface{}) error {
-	return c.SetBulkWithContext(context.Background(), items, c.cfg.Redis.TTL)
-}
+// // BulkSetWithDefaultTTL performs multiple Set operations using configured default TTL
+// func (c *Client) SetBulkWithDefaultTTL(items map[string]interface{}) error {
+// 	return c.SetBulkWithContext(context.Background(), items, c.cfg.Redis.TTL)
+// }
 
-// BulkSetWithContext performs multiple Set operations with context
-func (c *Client) SetBulkWithContext(ctx context.Context, items map[string]interface{}, ttl time.Duration) error {
-	for key, value := range items {
-		if err := c.service.AddBulkOperation(ctx, "SET", key, value, ttl); err != nil {
-			return fmt.Errorf("failed to add bulk operation for key %s: %v", key, err)
-		}
-	}
-	return nil
-}
+// // BulkSetWithContext performs multiple Set operations with context
+// func (c *Client) SetBulkWithContext(ctx context.Context, items map[string]interface{}, ttl time.Duration) error {
+// 	for key, value := range items {
+// 		if err := c.service.AddBulkOperation(ctx, "SET", key, value, ttl); err != nil {
+// 			return fmt.Errorf("failed to add bulk operation for key %s: %v", key, err)
+// 		}
+// 	}
+// 	return nil
+// }

@@ -11,42 +11,58 @@ import (
 
 // Get retrieves a value by key
 func (rs *RedisService) Get(ctx context.Context, key string) (string, error) {
-	return rs.operationManager.ExecuteReadOp(ctx, "GET", func() (string, error) {
+	var result string
+	err := rs.operationManager.ExecuteWithLock(ctx, "GET", func() error {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
-			var result string
-			err := rs.cb.Execute(func() error {
+			return rs.cb.Execute(func() error {
+				return rs.timeoutManager.ExecuteWithRetry(ctx, "GET", 1, rs.cfg.Redis.RetryAttempts,
+					func(ctx context.Context) error {
+						var getErr error
+						result, getErr = rs.wrapper.WrapGet(ctx, key, func() (string, error) {
+							return rs.get(ctx, key)
+						})
+						return getErr
+					})
+			})
+		}
+		return rs.timeoutManager.ExecuteWithRetry(ctx, "GET", 1, rs.cfg.Redis.RetryAttempts,
+			func(ctx context.Context) error {
 				var getErr error
 				result, getErr = rs.wrapper.WrapGet(ctx, key, func() (string, error) {
 					return rs.get(ctx, key)
 				})
 				return getErr
 			})
-			return result, err
-		}
-		return rs.wrapper.WrapGet(ctx, key, func() (string, error) {
-			return rs.get(ctx, key)
-		})
 	})
+	return result, err
 }
 
 // GetBatch retrieves multiple values in a single operation
 func (rs *RedisService) GetBatch(ctx context.Context, keys []string) (map[string]string, error) {
-	return rs.operationManager.ExecuteBatchOp(ctx, "MGET", func() (map[string]string, error) {
+	var result map[string]string
+	err := rs.operationManager.ExecuteWithLock(ctx, "MGET", func() error {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
-			var result map[string]string
-			err := rs.cb.Execute(func() error {
+			return rs.cb.Execute(func() error {
+				return rs.timeoutManager.ExecuteWithRetry(ctx, "BATCH", len(keys), rs.cfg.Redis.RetryAttempts,
+					func(ctx context.Context) error {
+						var getBatchErr error
+						result, getBatchErr = rs.wrapper.WrapBatchGet(ctx, keys, func() (map[string]string, error) {
+							return rs.getBatch(ctx, keys)
+						})
+						return getBatchErr
+					})
+			})
+		}
+		return rs.timeoutManager.ExecuteWithRetry(ctx, "BATCH", len(keys), rs.cfg.Redis.RetryAttempts,
+			func(ctx context.Context) error {
 				var getBatchErr error
 				result, getBatchErr = rs.wrapper.WrapBatchGet(ctx, keys, func() (map[string]string, error) {
 					return rs.getBatch(ctx, keys)
 				})
 				return getBatchErr
 			})
-			return result, err
-		}
-		return rs.wrapper.WrapBatchGet(ctx, keys, func() (map[string]string, error) {
-			return rs.getBatch(ctx, keys)
-		})
 	})
+	return result, err
 }
 
 // Get retrieves a value from Redis by key

@@ -10,22 +10,30 @@ import (
 
 // GetTTL gets TTL for a key
 func (rs *RedisService) GetTTL(ctx context.Context, key string) (time.Duration, error) {
-	return rs.operationManager.ExecuteDurationOp(ctx, "TTL", func() (time.Duration, error) {
+	var result time.Duration
+	err := rs.operationManager.ExecuteWithLock(ctx, "TTL", func() error {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
-			var result time.Duration
-			err := rs.cb.Execute(func() error {
+			return rs.cb.Execute(func() error {
+				return rs.timeoutManager.ExecuteWithRetry(ctx, "TTL", 1, rs.cfg.Redis.RetryAttempts,
+					func(ctx context.Context) error {
+						var ttlErr error
+						result, ttlErr = rs.wrapper.WrapTTL(ctx, key, func() (time.Duration, error) {
+							return rs.getTTL(ctx, key)
+						})
+						return ttlErr
+					})
+			})
+		}
+		return rs.timeoutManager.ExecuteWithRetry(ctx, "TTL", 1, rs.cfg.Redis.RetryAttempts,
+			func(ctx context.Context) error {
 				var ttlErr error
 				result, ttlErr = rs.wrapper.WrapTTL(ctx, key, func() (time.Duration, error) {
 					return rs.getTTL(ctx, key)
 				})
 				return ttlErr
 			})
-			return result, err
-		}
-		return rs.wrapper.WrapTTL(ctx, key, func() (time.Duration, error) {
-			return rs.getTTL(ctx, key)
-		})
 	})
+	return result, err
 }
 
 // SetTTL sets TTL for a key
@@ -33,6 +41,19 @@ func (rs *RedisService) SetTTL(ctx context.Context, key string, ttl time.Duratio
 	return rs.operationManager.ExecuteWithLock(ctx, "EXPIRE", func() error {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
 			return rs.cb.Execute(func() error {
+				return rs.timeoutManager.ExecuteWithRetry(ctx, "EXPIRE", 1, rs.cfg.Redis.RetryAttempts,
+					func(ctx context.Context) error {
+						return rs.wrapper.WrapOperation(ctx, "EXPIRE", map[string]interface{}{
+							"key": key,
+							"ttl": ttl,
+						}, func() error {
+							return rs.setTTL(ctx, key, ttl)
+						})
+					})
+			})
+		}
+		return rs.timeoutManager.ExecuteWithRetry(ctx, "EXPIRE", 1, rs.cfg.Redis.RetryAttempts,
+			func(ctx context.Context) error {
 				return rs.wrapper.WrapOperation(ctx, "EXPIRE", map[string]interface{}{
 					"key": key,
 					"ttl": ttl,
@@ -40,55 +61,62 @@ func (rs *RedisService) SetTTL(ctx context.Context, key string, ttl time.Duratio
 					return rs.setTTL(ctx, key, ttl)
 				})
 			})
-		}
-		return rs.wrapper.WrapOperation(ctx, "EXPIRE", map[string]interface{}{
-			"key": key,
-			"ttl": ttl,
-		}, func() error {
-			return rs.setTTL(ctx, key, ttl)
-		})
 	})
 }
 
 // GetBatchTTL gets TTL for multiple keys
 func (rs *RedisService) GetBatchTTL(ctx context.Context, keys []string) (map[string]time.Duration, error) {
-	return rs.operationManager.ExecuteBatchDurationOp(ctx, "MTTL", func() (map[string]time.Duration, error) {
+	var result map[string]time.Duration
+	err := rs.operationManager.ExecuteWithLock(ctx, "MTTL", func() error {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
-			var result map[string]time.Duration
-			err := rs.cb.Execute(func() error {
+			return rs.cb.Execute(func() error {
+				return rs.timeoutManager.ExecuteWithRetry(ctx, "BATCH", len(keys), rs.cfg.Redis.RetryAttempts,
+					func(ctx context.Context) error {
+						var ttlErr error
+						result, ttlErr = rs.wrapper.WrapBatchTTL(ctx, keys, func() (map[string]time.Duration, error) {
+							return rs.getBatchTTL(ctx, keys)
+						})
+						return ttlErr
+					})
+			})
+		}
+		return rs.timeoutManager.ExecuteWithRetry(ctx, "BATCH", len(keys), rs.cfg.Redis.RetryAttempts,
+			func(ctx context.Context) error {
 				var ttlErr error
 				result, ttlErr = rs.wrapper.WrapBatchTTL(ctx, keys, func() (map[string]time.Duration, error) {
 					return rs.getBatchTTL(ctx, keys)
 				})
 				return ttlErr
 			})
-			return result, err
-		}
-		return rs.wrapper.WrapBatchTTL(ctx, keys, func() (map[string]time.Duration, error) {
-			return rs.getBatchTTL(ctx, keys)
-		})
 	})
+	return result, err
 }
 
 // SetBatchTTL sets TTL for multiple keys
 func (rs *RedisService) SetBatchTTL(ctx context.Context, keys []string, ttl time.Duration) error {
-	return rs.operationManager.ExecuteWithLock(ctx, "BATCH_EXPIRE", func() error {
+	return rs.operationManager.ExecuteWithLock(ctx, "MEXPIRE", func() error {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
 			return rs.cb.Execute(func() error {
+				return rs.timeoutManager.ExecuteWithRetry(ctx, "BATCH", len(keys), rs.cfg.Redis.RetryAttempts,
+					func(ctx context.Context) error {
+						return rs.wrapper.WrapOperation(ctx, "BATCH_EXPIRE", map[string]interface{}{
+							"keys": keys,
+							"ttl":  ttl,
+						}, func() error {
+							return rs.setBatchTTL(ctx, keys, ttl)
+						})
+					})
+			})
+		}
+		return rs.timeoutManager.ExecuteWithRetry(ctx, "BATCH", len(keys), rs.cfg.Redis.RetryAttempts,
+			func(ctx context.Context) error {
 				return rs.wrapper.WrapOperation(ctx, "BATCH_EXPIRE", map[string]interface{}{
-					"keys_count": len(keys),
-					"ttl":        ttl,
+					"keys": keys,
+					"ttl":  ttl,
 				}, func() error {
 					return rs.setBatchTTL(ctx, keys, ttl)
 				})
 			})
-		}
-		return rs.wrapper.WrapOperation(ctx, "BATCH_EXPIRE", map[string]interface{}{
-			"keys_count": len(keys),
-			"ttl":        ttl,
-		}, func() error {
-			return rs.setBatchTTL(ctx, keys, ttl)
-		})
 	})
 }
 

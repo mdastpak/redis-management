@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mdastpak/redis-management/config"
+	"redis-management/config"
 
 	"github.com/go-redis/redis/v8"
 )
@@ -18,7 +18,6 @@ import (
 type reloadState struct {
 	needsPoolReload      bool
 	needsKeyMgrReload    bool
-	needsBulkReload      bool
 	needsCircuitReload   bool
 	needsOperationReload bool
 }
@@ -84,7 +83,6 @@ func determineReloadState(old, new *config.Config) reloadState {
 	return reloadState{
 		needsPoolReload:      poolConfigChanged(old.Pool, new.Pool),
 		needsKeyMgrReload:    keyManagerConfigChanged(old.Redis, new.Redis),
-		needsBulkReload:      bulkConfigChanged(old.Bulk, new.Bulk),
 		needsCircuitReload:   circuitConfigChanged(old.Circuit, new.Circuit),
 		needsOperationReload: operationConfigChanged(old, new),
 	}
@@ -107,16 +105,6 @@ func (rs *RedisService) reloadComponents(ctx context.Context, state reloadState,
 	// Reload secondary components in parallel
 	var wg sync.WaitGroup
 	errChan := make(chan error, 3)
-
-	if state.needsBulkReload {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := rs.reloadBulkProcessor(rollbackActions, &oldCfg.Bulk); err != nil {
-				errChan <- err
-			}
-		}()
-	}
 
 	if state.needsCircuitReload {
 		wg.Add(1)
@@ -223,41 +211,6 @@ func cleanupPool(manager *PoolManager, pool *redis.Client) {
 	}
 }
 
-func (rs *RedisService) reloadBulkProcessor(rollbackActions *[]func(), oldConfig *config.BulkConfig) error {
-	// No action needed if both configurations are disabled
-	if !oldConfig.Status && !rs.cfg.Bulk.Status {
-		return nil
-	}
-
-	// Store current state for possible rollback
-	oldProcessor := rs.bulkProcessor
-
-	// Clean up old bulk processor if it was enabled
-	if oldConfig.Status {
-		if oldProcessor != nil {
-			oldProcessor.Stop()
-			rs.bulkProcessor = nil
-		}
-	}
-
-	// Initialize new bulk processor if enabled in new configuration
-	if rs.cfg.Bulk.Status {
-		newProcessor := NewBulkProcessor(rs, &rs.cfg.Bulk, rs.logger)
-		rs.bulkProcessor = newProcessor
-		rs.bulkProcessor.Start(context.Background())
-
-		// Add rollback action
-		*rollbackActions = append(*rollbackActions, func() {
-			if rs.bulkProcessor != nil {
-				rs.bulkProcessor.Stop()
-			}
-			rs.bulkProcessor = oldProcessor
-		})
-	}
-
-	return nil
-}
-
 func (rs *RedisService) reloadCircuitBreaker(rollbackActions *[]func(), oldConfig *config.CircuitConfig) error {
 	// No action needed if both configurations are disabled
 	if !oldConfig.Status && !rs.cfg.Circuit.Status {
@@ -362,14 +315,6 @@ func keyManagerConfigChanged(old, new config.RedisConfig) bool {
 		old.DB != new.DB
 }
 
-func bulkConfigChanged(old, new config.BulkConfig) bool {
-	return old.Status != new.Status ||
-		old.BatchSize != new.BatchSize ||
-		old.FlushInterval != new.FlushInterval ||
-		old.MaxRetries != new.MaxRetries ||
-		old.ConcurrentFlush != new.ConcurrentFlush
-}
-
 func circuitConfigChanged(old, new config.CircuitConfig) bool {
 	return old.Status != new.Status ||
 		old.Threshold != new.Threshold ||
@@ -387,16 +332,14 @@ func operationConfigChanged(old, new *config.Config) bool {
 func (rs reloadState) hasChanges() bool {
 	return rs.needsPoolReload ||
 		rs.needsKeyMgrReload ||
-		rs.needsBulkReload ||
 		rs.needsCircuitReload ||
 		rs.needsOperationReload
 }
 
 func (rs reloadState) String() string {
-	return fmt.Sprintf("Pool: %v, KeyMgr: %v, Bulk: %v, Circuit: %v, Operation: %v",
+	return fmt.Sprintf("Pool: %v, KeyMgr: %v, Circuit: %v, Operation: %v",
 		rs.needsPoolReload,
 		rs.needsKeyMgrReload,
-		rs.needsBulkReload,
 		rs.needsCircuitReload,
 		rs.needsOperationReload)
 }

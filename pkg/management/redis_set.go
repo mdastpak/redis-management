@@ -11,14 +11,20 @@ func (rs *RedisService) Set(ctx context.Context, key string, value interface{}, 
 	return rs.operationManager.ExecuteWithLock(ctx, "SET", func() error {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
 			return rs.cb.Execute(func() error {
+				return rs.timeoutManager.ExecuteWithRetry(ctx, "SET", 1, rs.cfg.Redis.RetryAttempts,
+					func(ctx context.Context) error {
+						return rs.wrapper.WrapSet(ctx, key, value, func() error {
+							return rs.set(ctx, key, value, expiration)
+						})
+					})
+			})
+		}
+		return rs.timeoutManager.ExecuteWithRetry(ctx, "SET", 1, rs.cfg.Redis.RetryAttempts,
+			func(ctx context.Context) error {
 				return rs.wrapper.WrapSet(ctx, key, value, func() error {
 					return rs.set(ctx, key, value, expiration)
 				})
 			})
-		}
-		return rs.wrapper.WrapSet(ctx, key, value, func() error {
-			return rs.set(ctx, key, value, expiration)
-		})
 	})
 }
 
@@ -32,14 +38,20 @@ func (rs *RedisService) SetBatch(ctx context.Context, items map[string]interface
 	return rs.operationManager.ExecuteWithLock(ctx, "MSET", func() error {
 		if rs.cb != nil && rs.cfg.Circuit.Status {
 			return rs.cb.Execute(func() error {
+				return rs.timeoutManager.ExecuteWithRetry(ctx, "BATCH", len(items), rs.cfg.Redis.RetryAttempts,
+					func(ctx context.Context) error {
+						return rs.wrapper.WrapBatchSet(ctx, items, func() error {
+							return rs.setBatch(ctx, items, expiration)
+						})
+					})
+			})
+		}
+		return rs.timeoutManager.ExecuteWithRetry(ctx, "BATCH", len(items), rs.cfg.Redis.RetryAttempts,
+			func(ctx context.Context) error {
 				return rs.wrapper.WrapBatchSet(ctx, items, func() error {
 					return rs.setBatch(ctx, items, expiration)
 				})
 			})
-		}
-		return rs.wrapper.WrapBatchSet(ctx, items, func() error {
-			return rs.setBatch(ctx, items, expiration)
-		})
 	})
 }
 
@@ -50,9 +62,6 @@ func (rs *RedisService) SetBatchWithDefaultTTL(ctx context.Context, items map[st
 
 // Set stores a key-value pair in Redis with an expiration time
 func (rs *RedisService) set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
-	if rs.cfg.Bulk.Status {
-		return rs.AddBulkOperation(ctx, "SET", key, value, expiration)
-	}
 
 	client := rs.getClient()
 	if client == nil {

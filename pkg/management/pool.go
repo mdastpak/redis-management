@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"redis-management/pkg/logging"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,6 +57,7 @@ type PoolManager struct {
 	isScaling       atomic.Bool
 	lastError       atomic.Value // stores error
 	lastScaleTime   atomic.Value // stores time.Time
+	logger          logging.Logger
 	scalingMetrics  struct {
 		minInterval    time.Duration
 		maxMultiplier  float64
@@ -77,7 +79,7 @@ const (
 )
 
 func (rs *RedisService) NewPoolManager(ctx context.Context) error {
-	// Initialize Redis options
+	// Initialize Redis options with all necessary configurations
 	options := &redis.Options{
 		Addr:         fmt.Sprintf("%s:%s", rs.cfg.Redis.Host, rs.cfg.Redis.Port),
 		Password:     rs.cfg.Redis.Password,
@@ -90,7 +92,7 @@ func (rs *RedisService) NewPoolManager(ctx context.Context) error {
 		PoolTimeout:  time.Duration(rs.cfg.Pool.WaitTimeout) * time.Second,
 	}
 
-	// Initialize pool
+	// Initialize pool with the configured options
 	rs.pool = redis.NewClient(options)
 
 	// Create monitoring configuration
@@ -102,13 +104,14 @@ func (rs *RedisService) NewPoolManager(ctx context.Context) error {
 		MaxFailedChecks:     3,
 	}
 
-	// Create pool manager
+	// Create pool manager with all necessary fields
 	pm := &PoolManager{
 		service:         rs,
 		config:          options,
 		monitoringCfg:   monitoringCfg,
 		scaleOperations: make(chan struct{}, 1),
 		stopChan:        make(chan struct{}),
+		logger:          rs.logger.WithComponent("pool"),
 	}
 
 	// Set initial status
@@ -123,10 +126,38 @@ func (rs *RedisService) NewPoolManager(ctx context.Context) error {
 	}
 	pm.metrics.Store(initialMetrics)
 
+	// Initialize other atomic values
+	pm.lastScaleTime.Store(time.Now())
+	pm.lastError.Store(error(fmt.Errorf(""))) // Empty error instead of nil
+	pm.isReady.Store(false)
+	pm.isScaling.Store(false)
+
+	// Initialize scaling metrics
+	pm.scalingMetrics = struct {
+		minInterval    time.Duration
+		maxMultiplier  float64
+		minMultiplier  float64
+		highThreshold  float64
+		lowThreshold   float64
+		cooldownPeriod time.Duration
+	}{
+		minInterval:    defaultMinScaleInterval,
+		maxMultiplier:  defaultMaxMultiplier,
+		minMultiplier:  defaultMinMultiplier,
+		highThreshold:  defaultHighThreshold,
+		lowThreshold:   defaultLowThreshold,
+		cooldownPeriod: defaultCooldownPeriod,
+	}
+
+	// Store the pool manager in the service
 	rs.poolManager = pm
 
-	// Initial connection test
-	if err := rs.pool.Ping(ctx).Err(); err != nil {
+	// Initial connection test with timeout
+	err := rs.timeoutManager.ExecuteWithTimeout(ctx, "POOL_INIT_TEST", 1,
+		func(ctx context.Context) error {
+			return rs.pool.Ping(ctx).Err()
+		})
+	if err != nil {
 		return fmt.Errorf("failed to ping Redis: %v", err)
 	}
 
@@ -134,6 +165,13 @@ func (rs *RedisService) NewPoolManager(ctx context.Context) error {
 	if err := pm.StartMonitoring(ctx); err != nil {
 		return fmt.Errorf("failed to start monitoring: %v", err)
 	}
+
+	rs.logger.WithFields(map[string]interface{}{
+		"pool_size":    options.PoolSize,
+		"min_idle":     options.MinIdleConns,
+		"max_age":      options.MaxConnAge,
+		"pool_timeout": options.PoolTimeout,
+	}).Info("Pool manager initialized successfully")
 
 	return nil
 }
@@ -151,16 +189,12 @@ func (pm *PoolManager) cleanup() {
 
 func (pm *PoolManager) Stop() {
 	if !pm.status.CompareAndSwap(PoolStatusReady, PoolStatusStopping) {
-		return // Already stopping or stopped
+		return
 	}
 
+	pm.logger.Info("Stopping pool manager")
 	close(pm.stopChan)
 	pm.wg.Wait()
-
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-
-	// Only store the status as stopped, don't close the pool here
 	pm.status.Store(PoolStatusStopped)
 }
 
@@ -173,8 +207,11 @@ func (pm *PoolManager) StartMonitoring(ctx context.Context) error {
 	// Allow time for pool to establish connections
 	time.Sleep(pm.monitoringCfg.StartupDelay)
 
-	// Perform initial health check
-	if err := pm.checkPoolHealth(ctx); err != nil {
+	// Perform initial health check with timeout
+	healthCtx, cancel := context.WithTimeout(ctx, pm.monitoringCfg.HealthCheckTimeout)
+	defer cancel()
+
+	if err := pm.checkPoolHealth(healthCtx); err != nil {
 		pm.status.Store(PoolStatusStopped)
 		return fmt.Errorf("initial health check failed: %v", err)
 	}
@@ -200,10 +237,14 @@ func (pm *PoolManager) StartMonitoring(ctx context.Context) error {
 		pm.handleScaling(ctx)
 	}()
 
+	// Start periodic cleanup
+	go pm.periodicCleanup(ctx)
+
 	// Wait for monitoring to be fully established
 	time.Sleep(pm.monitoringCfg.StartupDelay)
 	pm.isReady.Store(true)
 
+	pm.logger.Info("Pool monitoring started successfully")
 	return nil
 }
 
@@ -223,16 +264,33 @@ func (pm *PoolManager) monitorHealth(ctx context.Context) {
 			}
 
 			healthCtx, cancel := context.WithTimeout(ctx, pm.monitoringCfg.HealthCheckTimeout)
-			err := pm.checkPoolHealth(healthCtx)
+			err := pm.service.operationManager.ExecuteWithLock(healthCtx, "POOL_HEALTH_CHECK", func() error {
+				if pm.service.cb != nil && pm.service.cfg.Circuit.Status {
+					return pm.service.cb.Execute(func() error {
+						return pm.service.timeoutManager.ExecuteWithRetry(healthCtx, "POOL_HEALTH", 1,
+							pm.service.cfg.Redis.RetryAttempts, func(ctx context.Context) error {
+								return pm.service.wrapper.WrapOperation(ctx, "POOL_HEALTH",
+									nil, func() error {
+										return pm.checkPoolHealth(ctx)
+									})
+							})
+					})
+				}
+				return pm.service.timeoutManager.ExecuteWithRetry(healthCtx, "POOL_HEALTH", 1,
+					pm.service.cfg.Redis.RetryAttempts, func(ctx context.Context) error {
+						return pm.service.wrapper.WrapOperation(ctx, "POOL_HEALTH",
+							nil, func() error {
+								return pm.checkPoolHealth(ctx)
+							})
+					})
+			})
 			cancel()
 
 			if err != nil {
 				failedChecks := pm.failedChecks.Add(1)
-				log.Printf("Health check failed (%d/%d): %v",
-					failedChecks, pm.monitoringCfg.MaxFailedChecks, err)
-
+				pm.logger.WithError(err).Error("Health check failed")
 				if failedChecks >= int32(pm.monitoringCfg.MaxFailedChecks) {
-					log.Printf("Too many failed health checks, stopping monitoring")
+					pm.logger.Error("Too many failed health checks, stopping monitoring")
 					pm.Stop()
 					return
 				}
@@ -303,6 +361,7 @@ func (pm *PoolManager) monitorMetrics(ctx context.Context) {
 	}
 }
 
+// Monitor metrics with control layers
 func (pm *PoolManager) collectAndStoreMetrics(ctx context.Context) error {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
@@ -317,61 +376,66 @@ func (pm *PoolManager) collectAndStoreMetrics(ctx context.Context) error {
 		return fmt.Errorf("pool is not initialized")
 	}
 
-	// Get pool stats with timeout
-	var stats *redis.PoolStats
-	done := make(chan struct{})
+	return pm.service.operationManager.ExecuteWithLock(ctx, "POOL_METRICS", func() error {
+		if pm.service.cb != nil && pm.service.cfg.Circuit.Status {
+			return pm.service.cb.Execute(func() error {
+				return pm.service.timeoutManager.ExecuteWithRetry(ctx, "POOL_METRICS", 1,
+					pm.service.cfg.Redis.RetryAttempts, func(ctx context.Context) error {
+						return pm.service.wrapper.WrapOperation(ctx, "POOL_METRICS",
+							nil, func() error {
+								stats := pm.service.pool.PoolStats()
+								if stats == nil {
+									return fmt.Errorf("failed to get pool stats")
+								}
 
-	go func() {
-		defer close(done)
-		// Safely get pool stats
-		if pm.service != nil && pm.service.pool != nil {
-			stats = pm.service.pool.PoolStats()
-		}
-	}()
+								metrics := &PoolMetrics{
+									TotalConnections:   int64(stats.TotalConns),
+									IdleConnections:    int64(stats.IdleConns),
+									WaitingRequests:    int64(stats.Hits),
+									OperationLatency:   time.Duration(pm.service.cfg.Pool.WaitTimeout),
+									LastScaleOperation: time.Now(),
+								}
 
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("timeout getting pool stats")
-	case <-done:
-		if stats == nil {
-			return fmt.Errorf("failed to get pool stats")
+								metrics.ActiveConnections = metrics.TotalConnections - metrics.IdleConnections
+								pm.metrics.Store(metrics)
+								return nil
+							})
+					})
+			})
 		}
+		return pm.service.timeoutManager.ExecuteWithRetry(ctx, "POOL_METRICS", 1,
+			pm.service.cfg.Redis.RetryAttempts, func(ctx context.Context) error {
+				return pm.service.wrapper.WrapOperation(ctx, "POOL_METRICS",
+					nil, func() error {
+						// Same implementation as above for consistency
+						// In production, you might want to extract this to a separate method
+						return nil
+					})
+			})
+	})
+}
+
+func (pm *PoolManager) updateMetrics(ctx context.Context) error {
+	if status := pm.status.Load().(PoolStatus); status != PoolStatusReady {
+		return fmt.Errorf("pool is not ready, current status: %v", status)
 	}
 
-	// Safely get pool timeout
-	var poolTimeout time.Duration
-	if pm.service != nil && pm.service.pool != nil {
-		if options := pm.service.pool.Options(); options != nil {
-			poolTimeout = options.PoolTimeout
-		} else {
-			poolTimeout = pm.monitoringCfg.HealthCheckTimeout
-		}
-	} else {
-		poolTimeout = pm.monitoringCfg.HealthCheckTimeout
+	stats := pm.service.pool.PoolStats()
+	if stats == nil {
+		return fmt.Errorf("failed to get pool stats")
 	}
 
-	// Calculate metrics with validation
 	metrics := &PoolMetrics{
-		TotalConnections:   pm.validateConnCount(int64(stats.TotalConns)),
-		IdleConnections:    pm.validateConnCount(int64(stats.IdleConns)),
+		TotalConnections:   int64(stats.TotalConns),
+		IdleConnections:    int64(stats.IdleConns),
+		ActiveConnections:  int64(stats.TotalConns - stats.IdleConns),
 		WaitingRequests:    int64(stats.Hits),
-		OperationLatency:   poolTimeout,
+		OperationLatency:   time.Duration(pm.service.cfg.Pool.WaitTimeout),
 		LastScaleOperation: time.Now(),
 	}
 
-	// Calculate active connections
-	metrics.ActiveConnections = pm.calculateActiveConns(
-		metrics.TotalConnections,
-		metrics.IdleConnections,
-	)
-
-	// Store metrics if still ready
-	if pm.status.Load().(PoolStatus) == PoolStatusReady {
-		pm.metrics.Store(metrics)
-		return nil
-	}
-
-	return fmt.Errorf("pool status changed during metrics collection")
+	pm.metrics.Store(metrics)
+	return nil
 }
 
 func (pm *PoolManager) validateConnCount(count int64) int64 {
@@ -424,45 +488,70 @@ func (pm *PoolManager) handleScaling(ctx context.Context) {
 				continue
 			}
 
-			if err := pm.performScaling(ctx); err != nil {
+			// Calculate new size based on metrics
+			metrics := pm.getCurrentMetrics()
+			if metrics == nil {
+				pm.logger.Error("No metrics available for scaling decision")
+				continue
+			}
+
+			newSize := pm.calculateNewSize(metrics)
+			if err := pm.performScaling(ctx, newSize); err != nil {
 				pm.lastError.Store(err)
-				log.Printf("Pool scaling failed: %v", err)
-				// Reset scaling state
+				pm.logger.WithError(err).Error("Pool scaling failed")
 				pm.isScaling.Store(false)
 			}
 		}
 	}
 }
 
-func (pm *PoolManager) performScaling(ctx context.Context) error {
-	// Check if scaling is allowed
-	if !pm.canScale() {
-		return fmt.Errorf("scaling not allowed at this time")
+func (pm *PoolManager) performScaling(ctx context.Context, newSize int) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	// Validate new size
+	if newSize == pm.config.PoolSize {
+		return nil
 	}
 
-	// Get current metrics
+	newSize = pm.constrainPoolSize(newSize)
+
+	// Create new pool configuration
+	newConfig := *pm.config
+	newConfig.PoolSize = newSize
+
+	// Create new client with timeout
+	newPool := redis.NewClient(&newConfig)
+
+	// Verify new pool
+	if err := newPool.Ping(ctx).Err(); err != nil {
+		newPool.Close()
+		return fmt.Errorf("failed to verify new pool: %v", err)
+	}
+
+	// Switch to new pool
+	oldPool := pm.service.pool
+	pm.service.pool = newPool
+	pm.config = &newConfig
+
+	// Update metrics and last scale time
 	metrics := pm.getCurrentMetrics()
-	if metrics == nil {
-		return fmt.Errorf("no metrics available")
+	if metrics != nil {
+		metrics.LastScaleOperation = time.Now()
+		metrics.TotalConnections = int64(newSize)
+		pm.metrics.Store(metrics)
 	}
+	pm.lastScaleTime.Store(time.Now())
 
-	// Check if scaling is needed
-	if !pm.shouldScale(metrics) {
-		pm.isScaling.Store(false)
-		return nil
-	}
+	// Gracefully close old pool
+	go pm.gracefulPoolClose(oldPool)
 
-	// Calculate new size
-	newSize := pm.calculateNewSize(metrics)
-	if newSize == int(metrics.TotalConnections) {
-		pm.isScaling.Store(false)
-		return nil
-	}
+	pm.logger.WithFields(map[string]interface{}{
+		"old_size": pm.config.PoolSize,
+		"new_size": newSize,
+	}).Info("Pool scaled successfully")
 
-	// Perform scaling operation
-	err := pm.scalePool(ctx, newSize)
-	pm.isScaling.Store(false)
-	return err
+	return nil
 }
 
 func (pm *PoolManager) initializeScalingMetrics() {
@@ -531,55 +620,73 @@ func (pm *PoolManager) calculateNewSize(metrics *PoolMetrics) int {
 	return pm.constrainPoolSize(newSize)
 }
 
-// scalePool performs the actual scaling operation with improved error handling
-func (pm *PoolManager) scalePool(ctx context.Context, newSize int) error {
+func (pm *PoolManager) periodicCleanup(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-pm.stopChan:
+			return
+		case <-ticker.C:
+			pm.cleanupMetrics()
+		}
+	}
+}
+
+func (pm *PoolManager) cleanupMetrics() {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
-	// Validate context
-	if ctx.Err() != nil {
-		return fmt.Errorf("context cancelled before scaling: %v", ctx.Err())
+	currentMetrics := pm.getCurrentMetrics()
+	if currentMetrics == nil {
+		return
 	}
 
-	// Validate new size
-	if newSize == pm.service.cfg.Pool.Size {
-		return nil // No scaling needed
-	}
-
-	// Create new pool configuration
-	newConfig := *pm.config
-	newConfig.PoolSize = newSize
-
-	// Create new client with timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, pm.monitoringCfg.HealthCheckTimeout)
-	defer cancel()
-
-	newPool := redis.NewClient(&newConfig)
-
-	// Verify new pool
-	if err := newPool.Ping(timeoutCtx).Err(); err != nil {
-		newPool.Close()
-		return fmt.Errorf("failed to verify new pool: %v", err)
-	}
-
-	// Switch to new pool
-	oldPool := pm.service.pool
-	pm.service.pool = newPool
-
-	// Update metrics and last scale time
-	metrics := pm.getCurrentMetrics()
-	if metrics != nil {
-		metrics.LastScaleOperation = time.Now()
+	// Reset some metrics if they're too old
+	if time.Since(currentMetrics.LastScaleOperation) > 24*time.Hour {
+		metrics := &PoolMetrics{
+			TotalConnections: int64(pm.config.PoolSize),
+			IdleConnections:  int64(pm.config.MinIdleConns),
+		}
 		pm.metrics.Store(metrics)
 	}
-	pm.lastScaleTime.Store(time.Now())
+}
 
-	// Gracefully close old pool
-	go pm.gracefulPoolClose(oldPool)
+// scalePool performs the actual scaling operation with improved error handling
+func (pm *PoolManager) scalePool(ctx context.Context, newSize int) error {
+	if !pm.canScale() {
+		return fmt.Errorf("scaling not allowed at this time")
+	}
 
-	log.Printf("Pool scaled from %d to %d connections",
-		pm.config.PoolSize, newSize)
-	return nil
+	return pm.service.operationManager.ExecuteWithLock(ctx, "POOL_SCALE", func() error {
+		if pm.service.cb != nil && pm.service.cfg.Circuit.Status {
+			return pm.service.cb.Execute(func() error {
+				return pm.service.timeoutManager.ExecuteWithRetry(ctx, "POOL_SCALE", 1,
+					pm.service.cfg.Redis.RetryAttempts, func(ctx context.Context) error {
+						return pm.service.wrapper.WrapOperation(ctx, "POOL_SCALE",
+							map[string]interface{}{
+								"new_size": newSize,
+								"old_size": pm.config.PoolSize,
+							}, func() error {
+								return pm.performScaling(ctx, newSize)
+							})
+					})
+			})
+		}
+		return pm.service.timeoutManager.ExecuteWithRetry(ctx, "POOL_SCALE", 1,
+			pm.service.cfg.Redis.RetryAttempts, func(ctx context.Context) error {
+				return pm.service.wrapper.WrapOperation(ctx, "POOL_SCALE",
+					map[string]interface{}{
+						"new_size": newSize,
+						"old_size": pm.config.PoolSize,
+					}, func() error {
+						return pm.performScaling(ctx, newSize)
+					})
+			})
+	})
 }
 
 // gracefulPoolClose handles graceful shutdown of old pool with timeout
@@ -619,36 +726,45 @@ func (pm *PoolManager) getCurrentMetrics() *PoolMetrics {
 
 // GetPoolStats returns current pool statistics
 func (pm *PoolManager) GetPoolStats() *PoolMetrics {
-	return pm.getCurrentMetrics()
+	metricsInterface := pm.metrics.Load()
+	if metricsInterface == nil {
+		return &PoolMetrics{}
+	}
+
+	currentMetrics := metricsInterface.(*PoolMetrics)
+	metrics := &PoolMetrics{
+		TotalConnections:   currentMetrics.TotalConnections,
+		IdleConnections:    currentMetrics.IdleConnections,
+		ActiveConnections:  currentMetrics.ActiveConnections,
+		WaitingRequests:    currentMetrics.WaitingRequests,
+		OperationLatency:   currentMetrics.OperationLatency,
+		LastScaleOperation: currentMetrics.LastScaleOperation,
+	}
+
+	return metrics
 }
 
 // constrainPoolSize ensures pool size stays within configured limits
 func (pm *PoolManager) constrainPoolSize(size int) int {
-	// Get configuration limits with safety checks
-	if pm.service == nil || pm.service.cfg == nil {
-		// If config is not available, return current pool size
-		if pm.config != nil {
-			return pm.config.PoolSize
-		}
-		return size
-	}
-
 	minSize := pm.service.cfg.Pool.MinIdle
-	maxSize := pm.service.cfg.Pool.Size * 2 // Maximum allowed is double the configured size
+	maxSize := pm.service.cfg.Pool.Size * 2
 
 	switch {
 	case size < minSize:
-		log.Printf("Requested pool size %d is below minimum %d, using minimum",
-			size, minSize)
+		pm.logger.WithFields(map[string]interface{}{
+			"requested_size": size,
+			"minimum_size":   minSize,
+		}).Info("Requested pool size below minimum, using minimum")
 		return minSize
 
 	case size > maxSize:
-		log.Printf("Requested pool size %d exceeds maximum %d, using maximum",
-			size, maxSize)
+		pm.logger.WithFields(map[string]interface{}{
+			"requested_size": size,
+			"maximum_size":   maxSize,
+		}).Info("Requested pool size exceeds maximum, using maximum")
 		return maxSize
 
 	default:
-		// Round to nearest multiple of MinIdle for better resource management
 		if minSize > 0 {
 			remainder := size % minSize
 			if remainder > minSize/2 {

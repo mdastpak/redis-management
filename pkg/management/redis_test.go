@@ -1,93 +1,76 @@
 package management
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
-
-	"github.com/mdastpak/redis-management/config"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// Helper function to be used across all test files
-func setupTestRedis(ctx context.Context) (*RedisService, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, err
-	}
-
-	rs, err := NewRedisService(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	fmt.Printf("Service initialized with wrapper: %v\n", rs.wrapper != nil)
-
-	return rs, nil
-}
-
 func TestRedisService_BasicOperations(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Set with No Expiration", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		key := "permanent_key"
 		value := "test_value"
 
-		err = rs.Set(ctx, key, value, 0)
+		err := rs.Set(ctx, key, value, 0)
 		require.NoError(t, err)
 
 		assertKeyValue(t, rs, key, value)
 		assertTTL(t, rs, key, time.Duration(-1))
 	})
 
-	t.Run("Set with Default TTL", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	t.Run("Large Batch Operations", func(t *testing.T) {
+		// Use scaled timeout for complex operations
+		rs, ctx, cancel := setupTestRedisWithConfig(t,
+			WithScale(3), // Triple the base timeout
+			// WithTimeout(10*time.Second), // Use larger base timeout
+		)
 		defer cancel()
 
-		rs, err := setupTestRedis(ctx)
+		// Prepare large batch
+		items := make(map[string]interface{})
+		for i := 0; i < 1000; i++ {
+			items[fmt.Sprintf("key_%d", i)] = fmt.Sprintf("value_%d", i)
+		}
+
+		err := rs.SetBatch(ctx, items, time.Hour)
 		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
+
+		// Verify a sample of items
+		for i := 0; i < 10; i++ {
+			key := fmt.Sprintf("key_%d", i*100)
+			expectedValue := fmt.Sprintf("value_%d", i*100)
+			assertKeyValue(t, rs, key, expectedValue)
+		}
+	})
+
+	t.Run("Operation Retries", func(t *testing.T) {
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
+		defer cancel()
+
+		err := withRetries(t, 3, func() error {
+			return rs.Set(ctx, "retry_key", "retry_value", time.Hour)
+		})
+		require.NoError(t, err)
+
+		assertKeyValue(t, rs, "retry_key", "retry_value")
+	})
+
+	t.Run("Set with Default TTL", func(t *testing.T) {
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
+		defer cancel()
 
 		key := "default_ttl_key"
 		value := "test_value"
 
-		err = rs.SetWithDefaultTTL(ctx, key, value)
+		err := rs.SetWithDefaultTTL(ctx, key, value)
 		require.NoError(t, err)
 
 		assertKeyValue(t, rs, key, value)
@@ -95,30 +78,15 @@ func TestRedisService_BasicOperations(t *testing.T) {
 	})
 
 	t.Run("SetBatch with Different TTLs", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		// No TTL batch
 		noTTLItems := map[string]interface{}{
 			"batch_no_ttl_1": "value1",
 			"batch_no_ttl_2": "value2",
 		}
-		err = rs.SetBatch(ctx, noTTLItems, 0)
+		err := rs.SetBatch(ctx, noTTLItems, 0)
 		require.NoError(t, err)
 
 		// Default TTL batch
@@ -143,30 +111,15 @@ func TestRedisService_BasicOperations(t *testing.T) {
 	})
 
 	t.Run("SetBatch with Zero TTL", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		// Explicit zero TTL
 		zeroTTLItems := map[string]interface{}{
 			"zero_ttl_1": "value1",
 			"zero_ttl_2": "value2",
 		}
-		err = rs.SetBatch(ctx, zeroTTLItems, 0)
+		err := rs.SetBatch(ctx, zeroTTLItems, 0)
 		require.NoError(t, err)
 
 		// No TTL specified (should be same as zero)
@@ -194,30 +147,15 @@ func TestTTLOperations(t *testing.T) {
 	t.Parallel()
 
 	t.Run("GetTTL and SetTTL Single Key", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		key := "ttl_test_key"
 		value := "test_value"
 		expectedTTL := 1 * time.Hour
 
 		// Set key with value
-		err = rs.Set(ctx, key, value, expectedTTL)
+		err := rs.Set(ctx, key, value, expectedTTL)
 		require.NoError(t, err)
 
 		// Get TTL
@@ -245,23 +183,8 @@ func TestTTLOperations(t *testing.T) {
 	})
 
 	t.Run("GetBatchTTL and SetBatchTTL", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		keys := []string{
 			"batch_ttl_1",
@@ -308,23 +231,8 @@ func TestTTLOperations(t *testing.T) {
 	})
 
 	t.Run("GetTTL Non-Existent Key", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		key := "non_existent_key"
 		ttl, err := rs.GetTTL(ctx, key)
@@ -333,51 +241,21 @@ func TestTTLOperations(t *testing.T) {
 	})
 
 	t.Run("SetTTL Non-Existent Key", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
 
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
-
 		key := "non_existent_key"
-		err = rs.SetTTL(ctx, key, time.Hour)
+		err := rs.SetTTL(ctx, key, time.Hour)
 		require.Error(t, err, "Setting TTL on non-existent key should fail")
 	})
 
 	t.Run("GetBatchTTL Mixed Keys", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		// Prepare: one existing key, one non-existent
 		existingKey := "existing_key"
-		err = rs.Set(ctx, existingKey, "value", time.Hour)
+		err := rs.Set(ctx, existingKey, "value", time.Hour)
 		require.NoError(t, err)
 
 		keys := []string{
@@ -398,28 +276,13 @@ func TestTTLOperations(t *testing.T) {
 	})
 
 	t.Run("Zero TTL Operations", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		key := "zero_ttl_key"
 
 		// Set key with no TTL
-		err = rs.Set(ctx, key, "value", 0)
+		err := rs.Set(ctx, key, "value", 0)
 		require.NoError(t, err)
 
 		// Verify no TTL

@@ -17,11 +17,6 @@ func ValidateConfig(config *Config) error {
 		return fmt.Errorf("pool config: %w", err)
 	}
 
-	// Bulk validations
-	if err := validateBulkConfig(&config.Bulk); err != nil {
-		return fmt.Errorf("bulk config: %w", err)
-	}
-
 	// Circuit validations
 	if err := validateCircuitConfig(&config.Circuit); err != nil {
 		return fmt.Errorf("circuit config: %w", err)
@@ -30,6 +25,11 @@ func ValidateConfig(config *Config) error {
 	// Logging validations
 	if err := validateLoggingConfig(&config.Logging); err != nil {
 		return fmt.Errorf("logging config: %w", err)
+	}
+
+	// Timeout validations
+	if err := validateTimeoutConfig(&config.Timeout); err != nil {
+		return fmt.Errorf("timeout config: %w", err)
 	}
 
 	return nil
@@ -90,22 +90,6 @@ func validatePoolConfig(c *PoolConfig) error {
 	}
 	if c.WaitTimeout <= 0 {
 		return fmt.Errorf("wait timeout must be positive")
-	}
-	return nil
-}
-
-func validateBulkConfig(c *BulkConfig) error {
-	if reflect.TypeOf(c.Status).Kind() != reflect.Bool {
-		return fmt.Errorf("status must be boolean, got %T", c.Status)
-	}
-	if c.BatchSize <= 0 {
-		return fmt.Errorf("batch size must be positive")
-	}
-	if c.FlushInterval <= 0 {
-		return fmt.Errorf("flush interval must be positive")
-	}
-	if c.MaxRetries < 0 {
-		return fmt.Errorf("max retries cannot be negative")
 	}
 	return nil
 }

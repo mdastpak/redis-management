@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mdastpak/redis-management/config"
-	"github.com/mdastpak/redis-management/pkg/management"
+	"redis-management/config"
+	"redis-management/pkg/management"
 )
 
 func main() {

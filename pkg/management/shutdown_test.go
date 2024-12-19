@@ -14,48 +14,18 @@ func TestShutdownManager(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Basic Shutdown", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
 
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
-
-		err = rs.operationManager.shutdownManager.Shutdown(ctx)
+		err := rs.operationManager.shutdownManager.Shutdown(ctx)
 		require.NoError(t, err)
 		assert.True(t, rs.operationManager.shutdownManager.IsShuttingDown())
 
 	})
 
 	t.Run("Operation Tracking", func(t *testing.T) {
-		// Create longer context for larger scales
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		// Track some operations
 		for i := 0; i < 5; i++ {
@@ -72,12 +42,8 @@ func TestShutdownManager(t *testing.T) {
 	})
 
 	t.Run("Graceful Shutdown with Active Operations", func(t *testing.T) {
-		// Context with reasonable timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
 
 		operationDone := make(chan struct{})
 
@@ -106,17 +72,14 @@ func TestShutdownManager(t *testing.T) {
 		}
 
 		// Check shutdown result
-		err = <-shutdownComplete
+		err := <-shutdownComplete
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), rs.operationManager.shutdownManager.GetOperationCount())
 	})
 
 	t.Run("Concurrent Shutdown Requests", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
 
 		// Track an operation
 		assert.True(t, rs.operationManager.shutdownManager.TrackOperation(ctx))
@@ -148,11 +111,8 @@ func TestShutdownManager(t *testing.T) {
 	})
 
 	t.Run("Shutdown Timeout", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
 
 		// Start long-running operations
 		for i := 0; i < 3; i++ {
@@ -160,8 +120,14 @@ func TestShutdownManager(t *testing.T) {
 		}
 
 		// Attempt shutdown with short timeout
-		err = rs.operationManager.shutdownManager.Shutdown(ctx)
+		err := rs.operationManager.shutdownManager.Shutdown(ctx)
 		require.Error(t, err)
+
+		// Detailed error logging
+		t.Logf("Error type: %T", err)
+		t.Logf("Full error message: %q", err.Error())
+		t.Logf("Error value: %#v", err)
+
 		assert.Contains(t, err.Error(), "shutdown timed out with 3 operations remaining")
 	})
 
@@ -185,22 +151,8 @@ func TestShutdownManager(t *testing.T) {
 	})
 
 	t.Run("Graceful Shutdown", func(t *testing.T) {
-		timeout := time.Duration(1) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t)
 		defer cancel()
-
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		operationDone := make(chan struct{})
 
@@ -215,7 +167,7 @@ func TestShutdownManager(t *testing.T) {
 		}()
 
 		// Initiate shutdown
-		err = rs.operationManager.shutdownManager.Shutdown(ctx)
+		err := rs.operationManager.shutdownManager.Shutdown(ctx)
 		require.NoError(t, err)
 
 		// Verify operation completed

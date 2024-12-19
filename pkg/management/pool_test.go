@@ -3,6 +3,7 @@ package management
 import (
 	"context"
 	"fmt"
+	"redis-management/config"
 	"sync"
 	"testing"
 	"time"
@@ -15,32 +16,21 @@ func TestConnectionPool(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Pool Statistics", func(t *testing.T) {
-		// Set appropriate timeout for pool initialization and stats collection
-		timeout := time.Duration(10) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		// Create context with timeout
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, _, cancel := setupTestRedisWithConfig(t,
+			WithInitialConfig(func(cfg *config.Config) {
+				cfg.Pool.Status = true
+				cfg.Pool.Size = 10
+				cfg.Pool.MinIdle = 2
+			}),
+		)
 		defer cancel()
-
-		// Initialize test Redis service
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		// Enable bulk operations for testing
 		newCfg := *rs.cfg
 		newCfg.Pool.Status = true
 
 		// Apply configuration
-		err = rs.ReloadConfig(&newCfg)
+		err := rs.ReloadConfig(&newCfg)
 		assert.NoError(t, err)
 
 		// Retrieve and verify pool statistics
@@ -62,38 +52,19 @@ func TestConnectionPool(t *testing.T) {
 	})
 
 	t.Run("Concurrent Operations", func(t *testing.T) {
-		// Set timeout for concurrent operations
-		timeout := time.Duration(10) * time.Second
-		if timeout < 5*time.Second {
-			timeout = 5 * time.Second
-		}
-
-		// Create context with timeout
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t,
+			WithInitialConfig(func(cfg *config.Config) {
+				cfg.Redis.HashKeys = false
+				cfg.Redis.KeyPrefix = "concurrent_operations:"
+				cfg.Pool.Status = true
+				cfg.Pool.Size = 10
+				cfg.Pool.MinIdle = 2
+			}),
+		)
 		defer cancel()
-
-		// Initialize test Redis service
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
 
 		// Define test parameters
 		const numOperations = 10
-
-		// Configure Redis service for testing
-		newCfg := *rs.cfg
-		newCfg.Redis.HashKeys = false
-		newCfg.Redis.KeyPrefix = "concurrent_operations:"
-		newCfg.Pool.Status = true
-
-		// Apply configuration
-		err = rs.ReloadConfig(&newCfg)
-		assert.NoError(t, err)
 
 		// Execute concurrent operations
 		var wg sync.WaitGroup
@@ -125,33 +96,16 @@ func TestConnectionPool(t *testing.T) {
 	})
 
 	t.Run("Pool Health Check", func(t *testing.T) {
-		// Set timeout for health checks
-		timeout := time.Duration(5) * time.Second
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		rs, ctx, cancel := setupTestRedisWithConfig(t,
+			WithInitialConfig(func(cfg *config.Config) {
+				cfg.Redis.HashKeys = false
+				cfg.Redis.KeyPrefix = "pool_health_check:"
+				cfg.Pool.Status = true
+				cfg.Pool.Size = 10
+				cfg.Pool.MinIdle = 2
+			}),
+		)
 		defer cancel()
-
-		// Initialize test Redis service
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
-
-		// Configure Redis service with pool enabled
-		newCfg := *rs.cfg
-		newCfg.Pool.Status = true
-		newCfg.Pool.Size = 10
-		newCfg.Pool.MinIdle = 2
-
-		newCfg.Redis.HashKeys = false
-		newCfg.Redis.KeyPrefix = "pool_health_check:"
-
-		// Apply configuration
-		err = rs.ReloadConfig(&newCfg)
-		assert.NoError(t, err)
 
 		// Verify initial pool state
 		initialStats := rs.GetPoolStats()
@@ -172,11 +126,11 @@ func TestConnectionPool(t *testing.T) {
 		require.NotNil(t, finalStats)
 
 		// Verify pool maintains minimum connections
-		assert.GreaterOrEqual(t, int(finalStats.IdleConns), newCfg.Pool.MinIdle,
+		assert.GreaterOrEqual(t, int(finalStats.IdleConns), rs.cfg.Pool.MinIdle,
 			"Pool should maintain minimum idle connections")
 
 		// Verify pool doesn't exceed maximum size
-		assert.LessOrEqual(t, int(finalStats.TotalConns), newCfg.Pool.Size,
+		assert.LessOrEqual(t, int(finalStats.TotalConns), rs.cfg.Pool.Size,
 			"Pool should not exceed maximum size")
 	})
 }
@@ -263,43 +217,27 @@ func TestPoolSizeAdjustment(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			// Create test context
-			ctx, cancel := context.WithTimeout(context.Background(), tc.testDuration)
+			rs, ctx, cancel := setupTestRedisWithConfig(t,
+				WithInitialConfig(func(cfg *config.Config) {
+					cfg.Redis.HashKeys = false
+					cfg.Redis.KeyPrefix = fmt.Sprintf("test_pool_size_adjustment_%s:", tc.name)
+					cfg.Pool.Status = true
+					cfg.Pool.Size = tc.initialSize
+					cfg.Pool.MinIdle = tc.minIdle
+					cfg.Pool.MaxIdleTime = tc.minIdle * 10
+					cfg.Pool.WaitTimeout = int(tc.waitTimeout.Seconds())
+
+					// Retry and timeout settings
+					cfg.Redis.RetryAttempts = 3
+					cfg.Redis.RetryDelay = time.Second
+					cfg.Redis.MaxRetryBackoff = 5 * time.Second
+					cfg.Redis.Timeout = int(tc.poolTimeout.Seconds())
+				}),
+			)
 			defer cancel()
 
-			// Initialize Redis service
-			rs, err := setupTestRedis(ctx)
-			require.NoError(t, err)
-			defer func() {
-				closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer closeCancel()
-				err := rs.Close(closeCtx)
-				require.NoError(t, err)
-			}()
-
-			// Configure Redis service
-			newCfg := *rs.cfg
-			newCfg.Redis.HashKeys = false
-			newCfg.Redis.KeyPrefix = fmt.Sprintf("test_pool_size_adjustment_%s:", tc.name)
-
-			// Pool configuration
-			newCfg.Pool.Status = true
-			newCfg.Pool.Size = tc.initialSize
-			newCfg.Pool.MinIdle = tc.minIdle
-			newCfg.Pool.MaxIdleTime = tc.minIdle * 10
-			newCfg.Pool.WaitTimeout = int(tc.waitTimeout.Seconds())
-
-			// Retry and timeout settings
-			newCfg.Redis.RetryAttempts = 3
-			newCfg.Redis.RetryDelay = time.Second
-			newCfg.Redis.MaxRetryBackoff = 5 * time.Second
-			newCfg.Redis.Timeout = int(tc.poolTimeout.Seconds())
-
-			err = rs.ReloadConfig(&newCfg)
-			assert.NoError(t, err)
-
 			// Wait for pool to initialize
-			time.Sleep(time.Second)
+			// time.Sleep(time.Second)
 
 			// Test Scale Up
 			// Test Scale Up
@@ -440,34 +378,23 @@ func TestPoolResilience(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Handle Connection Failures", func(t *testing.T) {
-		// Create context with timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		rs, ctx, cancel := setupTestRedisWithConfig(t,
+			WithInitialConfig(func(cfg *config.Config) {
+				cfg.Redis.HashKeys = false
+				cfg.Redis.KeyPrefix = "handle_connection_failures:"
+				cfg.Redis.RetryAttempts = 3
+				cfg.Redis.RetryDelay = time.Second
+				cfg.Redis.MaxRetryBackoff = 5 * time.Second
+
+				cfg.Pool.Status = true
+				cfg.Pool.Size = 10
+				cfg.Pool.MinIdle = 2
+			}),
+		)
 		defer cancel()
 
-		// Setup initial Redis instance
-		rs, err := setupTestRedis(ctx)
-		require.NoError(t, err)
-
-		// Store initial configuration for reuse
-		initialConfig := *rs.cfg
-
-		// Enable pool and configure with proper retry settings
-		newCfg := initialConfig
-		newCfg.Pool.Status = true
-		newCfg.Pool.Size = 10
-		newCfg.Pool.MinIdle = 2
-		newCfg.Redis.RetryAttempts = 3
-		newCfg.Redis.RetryDelay = time.Second
-		newCfg.Redis.MaxRetryBackoff = 5 * time.Second
-		newCfg.Redis.HealthCheckInterval = 1
-
-		err = rs.ReloadConfig(&newCfg)
-		require.NoError(t, err)
-
-		t.Logf("Initial Redis instance at %s:%s", rs.cfg.Redis.Host, rs.cfg.Redis.Port)
-
 		// Set initial test data
-		err = rs.Set(ctx, "init_key", "init_value", time.Hour)
+		err := rs.Set(ctx, "init_key", "init_value", time.Hour)
 		require.NoError(t, err, "Should set initial value")
 
 		// Store initial metrics for comparison
@@ -490,20 +417,20 @@ func TestPoolResilience(t *testing.T) {
 		time.Sleep(2 * time.Second)
 		t.Log("Redis connection closed")
 
-		// Initialize new instance
-		rs, err = setupTestRedis(ctx)
-		require.NoError(t, err)
-		defer func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			err := rs.Close(closeCtx)
-			require.NoError(t, err)
-		}()
+		rs, ctx, cancel = setupTestRedisWithConfig(t,
+			WithInitialConfig(func(cfg *config.Config) {
+				cfg.Redis.HashKeys = false
+				cfg.Redis.KeyPrefix = "handle_connection_failures:"
+				cfg.Redis.RetryAttempts = 3
+				cfg.Redis.RetryDelay = time.Second
+				cfg.Redis.MaxRetryBackoff = 5 * time.Second
 
-		// Reapply pool configuration to new instance
-		t.Log("Reconfiguring new instance with pool settings...")
-		err = rs.ReloadConfig(&newCfg)
-		require.NoError(t, err, "Should reconfigure pool settings")
+				cfg.Pool.Status = true
+				cfg.Pool.Size = 10
+				cfg.Pool.MinIdle = 2
+			}),
+		)
+		defer cancel()
 
 		// Wait for pool to initialize
 		time.Sleep(2 * time.Second)
@@ -625,21 +552,20 @@ func TestPoolConcurrency(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			// Setup context with timeout
-			ctx, cancel := context.WithTimeout(context.Background(), tt.params.timeout)
+			rs, ctx, cancel := setupTestRedisWithConfig(t,
+				WithInitialConfig(func(cfg *config.Config) {
+					cfg.Redis.HashKeys = false
+					cfg.Redis.KeyPrefix = "handle_connection_failures:"
+					cfg.Redis.RetryAttempts = 3
+					cfg.Redis.RetryDelay = time.Second
+					cfg.Redis.MaxRetryBackoff = 5 * time.Second
+
+					cfg.Pool.Status = true
+					cfg.Pool.Size = tt.params.maxConcurrent * 2
+					cfg.Pool.MinIdle = tt.params.maxConcurrent / 2
+				}),
+			)
 			defer cancel()
-
-			// Initialize Redis service
-			rs, err := setupTestRedis(ctx)
-			require.NoError(t, err)
-
-			// Configure connection pool
-			newCfg := *rs.cfg
-			newCfg.Pool.Status = true
-			newCfg.Pool.Size = tt.params.maxConcurrent * 2
-			newCfg.Pool.MinIdle = tt.params.maxConcurrent / 2
-			err = rs.ReloadConfig(&newCfg)
-			require.NoError(t, err)
 
 			// Ensure cleanup happens after all operations
 			defer func() {

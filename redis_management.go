@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mdastpak/redis-management/config"
-	"github.com/mdastpak/redis-management/pkg/management"
+	"redis-management/config"
+	"redis-management/pkg/management"
 )
 
 // Client represents the main Redis management client
@@ -86,18 +86,6 @@ func NewClientWithCustomConfig(customConfig map[string]interface{}) (*Client, er
 			cfg.Pool.MaxIdleTime = value.(int)
 		case "pool_wait_timeout":
 			cfg.Pool.WaitTimeout = value.(int)
-
-		// Bulk configuration
-		case "bulk_status":
-			cfg.Bulk.Status = value.(bool)
-		case "bulk_batch_size":
-			cfg.Bulk.BatchSize = value.(int)
-		case "bulk_flush_interval":
-			cfg.Bulk.FlushInterval = value.(int)
-		case "bulk_max_retries":
-			cfg.Bulk.MaxRetries = value.(int)
-		case "bulk_concurrent_flush":
-			cfg.Bulk.ConcurrentFlush = value.(bool)
 
 		// Logging configuration
 		case "logging_level":
