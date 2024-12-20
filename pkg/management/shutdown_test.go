@@ -124,9 +124,9 @@ func TestShutdownManager(t *testing.T) {
 		require.Error(t, err)
 
 		// Detailed error logging
-		t.Logf("Error type: %T", err)
-		t.Logf("Full error message: %q", err.Error())
-		t.Logf("Error value: %#v", err)
+		// t.Logf("Error type: %T", err)
+		// t.Logf("Full error message: %q", err.Error())
+		// t.Logf("Error value: %#v", err)
 
 		assert.Contains(t, err.Error(), "shutdown timed out with 3 operations remaining")
 	})

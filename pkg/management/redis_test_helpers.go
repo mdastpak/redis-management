@@ -5,6 +5,7 @@ package management
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,11 +86,15 @@ func setupTestRedisWithConfig(t *testing.T, opts ...testSetupOption) (*RedisServ
 
 	if cfg.cleanup {
 		t.Cleanup(func() {
-			fmt.Println("setupTestRedisWithConfig - Cleaning up test resources")
+			// fmt.Println("setupTestRedisWithConfig - Cleaning up test resources")
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cleanupCancel()
-			_ = rs.Close(cleanupCtx)
-			// require.NoError(t, err)
+			closeErr := rs.Close(cleanupCtx)
+			// Check close error only when we don't expect an error
+			// For tests that expect shutdown errors, we shouldn't fail here
+			if !strings.Contains(t.Name(), "Timeout") && !strings.Contains(t.Name(), "Error") {
+				require.NoError(t, closeErr)
+			}
 		})
 	}
 
