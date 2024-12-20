@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"redis-management/pkg/logging"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/mdastpak/redis-management/pkg/logging"
 
 	"github.com/go-redis/redis/v8"
 )

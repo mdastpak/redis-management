@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"redis-management/pkg/errors"
+	"github.com/mdastpak/redis-management/pkg/errors"
 )
 
 // Context key type

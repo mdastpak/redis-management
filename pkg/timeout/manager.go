@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"redis-management/config"
+	"github.com/mdastpak/redis-management/config"
 )
 
 // OperationStats holds statistics for operation timing

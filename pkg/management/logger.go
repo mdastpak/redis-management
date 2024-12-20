@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	"redis-management/config"
+	"github.com/mdastpak/redis-management/config"
 )
 
 // RedisLogger implements the Logger interface for Redis service

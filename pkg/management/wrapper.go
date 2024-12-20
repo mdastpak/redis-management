@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"redis-management/pkg/errors"
-	"redis-management/pkg/logging"
+	"github.com/mdastpak/redis-management/pkg/errors"
+	"github.com/mdastpak/redis-management/pkg/logging"
 )
 
 // OperationWrapper provides common functionality for Redis operations
