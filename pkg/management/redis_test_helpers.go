@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mdastpak/redis-management/config"
+	"redis-management/config"
 
 	"github.com/stretchr/testify/require"
 )
@@ -64,6 +64,8 @@ func setupTestRedisWithConfig(t *testing.T, opts ...testSetupOption) (*RedisServ
 	}
 
 	timeout := cfg.baseTimeout * time.Duration(cfg.scale)
+	t.Logf("Setting up test with timeout: %v (baseTimeout: %v, scale: %d)",
+		timeout, cfg.baseTimeout, cfg.scale)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 
 	// Get default config
@@ -84,7 +86,7 @@ func setupTestRedisWithConfig(t *testing.T, opts ...testSetupOption) (*RedisServ
 	rs, err := NewRedisService(redisConfig)
 	require.NoError(t, err)
 
-	if cfg.cleanup {
+	if !redisConfig.Pool.Status && cfg.cleanup {
 		t.Cleanup(func() {
 			// fmt.Println("setupTestRedisWithConfig - Cleaning up test resources")
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)

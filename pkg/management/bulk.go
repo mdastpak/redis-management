@@ -85,7 +85,9 @@ func (rs *RedisService) executeBulkOperation(ctx context.Context, operation stri
 
 		// Process results
 		for i, cmd := range cmds {
-			if err := cmd.Err(); err != nil {
+			err := cmd.Err() // check for errors
+			fmt.Printf("executeBulkOperation - Error: %v\n", err)
+			if err != nil {
 				result.Errors = append(result.Errors, err)
 				result.FailedKeys = append(result.FailedKeys, fmt.Sprintf("%s_%d", operation, i))
 			} else {

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mdastpak/redis-management/pkg/logging"
+	"redis-management/pkg/logging"
 
 	"github.com/go-redis/redis/v8"
 )
@@ -21,6 +21,7 @@ type PoolMetrics struct {
 	WaitingRequests    int64         `json:"waiting_requests"`
 	OperationLatency   time.Duration `json:"operation_latency"`
 	LastScaleOperation time.Time     `json:"last_scale_operation"`
+	ErrorCount         int64         `json:"error_count"`
 }
 
 // PoolStatus represents the current state of the pool
@@ -433,6 +434,7 @@ func (pm *PoolManager) updateMetrics(ctx context.Context) error {
 		WaitingRequests:    int64(stats.Hits),
 		OperationLatency:   time.Duration(pm.service.cfg.Pool.WaitTimeout),
 		LastScaleOperation: time.Now(),
+		ErrorCount:         int64(stats.Misses), // Use Misses as error count
 	}
 
 	pm.metrics.Store(metrics)

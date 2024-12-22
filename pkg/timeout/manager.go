@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mdastpak/redis-management/config"
+	"redis-management/config"
 )
 
 // OperationStats holds statistics for operation timing
@@ -113,6 +113,9 @@ func (tm *Manager) RecordTiming(operation string, duration time.Duration) {
 // ExecuteWithTimeout executes a function with appropriate timeout
 func (tm *Manager) ExecuteWithTimeout(ctx context.Context, operation string, items int, fn func(context.Context) error) error {
 	timeout := tm.GetTimeout(operation, items)
+
+	// fmt.Printf("Timeout manager - Operation: %s, Items: %d, Calculated timeout: %v",
+	// operation, items, timeout)
 
 	// Create a new context with longer timeout for bulk operations
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout*2) // Double timeout for bulk operations

@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/mdastpak/redis-management/pkg/errors"
+	"redis-management/pkg/errors"
 )
 
 // Entry represents a log entry with all its fields and metadata

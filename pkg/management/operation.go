@@ -93,11 +93,18 @@ func (om *OperationManager) checkOperation(ctx context.Context, cmd string) erro
 	om.mu.RLock()
 	defer om.mu.RUnlock()
 
+	// Check if service is shutting down
 	if !om.shutdownManager.TrackOperation(ctx) {
-		return fmt.Errorf("service is shutting down or operation cancelled")
+		if om.shutdownManager.IsShuttingDown() {
+			om.service.logger.Info(fmt.Sprintf("Operation %s rejected: service is shutting down", cmd))
+			return fmt.Errorf("service is shutting down (operation: %s)", cmd)
+		}
+		om.service.logger.Info(fmt.Sprintf("Operation %s rejected: operation cancelled by context", cmd))
+		return fmt.Errorf("operation cancelled by context (operation: %s)", cmd)
 	}
 	defer om.shutdownManager.FinishOperation()
 
+	// Check maintenance mode
 	if om.maintenanceManager == nil {
 		return fmt.Errorf("maintenance manager is not initialized")
 	}

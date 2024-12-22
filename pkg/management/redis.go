@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mdastpak/redis-management/config"
-	"github.com/mdastpak/redis-management/pkg/logging"
-	"github.com/mdastpak/redis-management/pkg/timeout"
+	"redis-management/config"
+	"redis-management/pkg/logging"
+	"redis-management/pkg/timeout"
 
 	"github.com/go-redis/redis/v8"
 )
